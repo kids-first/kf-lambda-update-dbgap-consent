@@ -29,10 +29,10 @@ def read_dbgap_xml(study_id):
         study_id+"&rettype=xml"
     data = requests.get(url).content
     data = xmltodict.parse(data)
+    print(type(data))
     study_status = list(dict_or_list('@registration_status', data))
     accession = list(dict_or_list('@accession', data))[0]
-    if study_status[0] in ['released', 'completed_by_gpa']:
-        # if study_status[0] in ['released']:
+    if 'released' in study_status:
         bio_df = pd.DataFrame()
         bio_df['consent_code'] = list(
             dict_or_list('@consent_code', data))
@@ -67,13 +67,9 @@ def get_biospecimen_dataservice(study_id, DATASERVICE):
     """
     get biospecimens for the study from dataservice
     """
-    resp = requests.get(
-        DATASERVICE + '/studies?external_id='+study_id)
-    if resp.status_code == 200 and 'results' in resp.json():
-        kf_id = resp.json()['results'][0]['kf_id']
     b_df = pd.DataFrame()
     resp = requests.get(
-        DATASERVICE + '/biospecimens?limit=100&study_id='+kf_id)
+        DATASERVICE + '/biospecimens?limit=100&study_id='+study_id)
     response = resp.json()
     if resp.status_code == 200 and 'results' in resp.json():
         if 'next' not in response['_links']:
@@ -92,7 +88,7 @@ def get_biospecimen_dataservice(study_id, DATASERVICE):
                 biospecimen = response['results']
                 b_df = b_df.append(pd.DataFrame(biospecimen),
                                    ignore_index=True)
-    return b_df, kf_id
+    return b_df
 
 
 def handler(event, context):
@@ -104,84 +100,63 @@ def handler(event, context):
     # if DATASERVICE is None:
     #     return 'no dataservice url set'
     DATASERVICE = 'http://localhost:1080'
-    study_id = 'phs001168'
-    bio_df = read_dbgap_xml(study_id)
-    print("Extracted {0} dbgap consent code/s for the study {1}".format(
-        len(bio_df), study_id))
-    if bio_df is not None:
-        b_df, kf_id = get_biospecimen_dataservice(study_id, DATASERVICE)
-        print("Extracted {0} biospecimen/s from dataservice for the study {1}".
-              format(len(b_df), study_id))
-
-        if b_df is not None:
-            print(b_df.head(5))
-            print(bio_df.head(5))
-            merged_inner = pd.merge(
-                left=b_df, right=bio_df, left_on='external_sample_id',
-                right_on='external_id')
-            print("Updating {0} dbgap consent code/s of "
-                  "biospecimens for the study {1}".
-                  format(len(merged_inner), study_id))
-
-        """
-        Update dbgap_consent_code for biospecimens with the
-        matched external sample id's
-        """
-        if merged_inner is not None:
-            bs_count = 0
-            gf_count = 0
-            for index, row in merged_inner.iterrows():
-                bs = {
-                    "dbgap_consent_code": row['consent_code']
-                }
+    study_id = 'SD_BHJXBDQK'
+    consent_code = study_id+'.c1'
+    b_df = get_biospecimen_dataservice(study_id, DATASERVICE)
+    bs = {
+        "dbgap_consent_code": consent_code
+    }
+    print(bs)
+    bs_count = 0
+    if b_df is not None:
+        gf_count = 0
+        for index, row in b_df.iterrows():
+            resp = requests.patch(
+                DATASERVICE+'/biospecimens/'+row['kf_id'],
+                json=bs)
+            if resp.status_code == 502:
                 resp = requests.patch(
                     DATASERVICE+'/biospecimens/'+row['kf_id'],
                     json=bs)
-                if resp.status_code == 502:
-                    resp = requests.patch(
-                        DATASERVICE+'/biospecimens/'+row['kf_id'],
-                        json=bs)
-                bs_count = bs_count+1
+            bs_count = bs_count+1
+            """
+             Get the links of genomic files for that biospecimen
+            """
+            resp = requests.get(
+                DATASERVICE+row['_links']['genomic_files'])
+            """
+            Update acl in genomic_files
 
-                """
-                 Get the links of genomic files for that biospecimen
-                """
+            """
+            gf = {"acl": []}
+            gf['acl'].extend((consent_code, study_id))
+            # gf = {"acl": [study_id]}
+            if resp.status_code == 200:
+                response = resp.json()
+                for r in response['results']:
+                    print(r['acl'])
+                    gf['acl'] = list(set(r['acl']).union(set(gf['acl'])))
+                    print(gf)
+                    resp = requests.patch(
+                        DATASERVICE+'/genomic-files/' +
+                        r['kf_id'],
+                        json=gf)
+            elif resp.status_code == 502:
                 resp = requests.get(
                     DATASERVICE+row['_links']['genomic_files'])
-                """
-                Update acl in genomic_files
 
-                """
-                gf = {"acl": []}
-                gf['acl'].extend((row['consent_code'], study_id, kf_id))
                 if resp.status_code == 200:
                     response = resp.json()
                     for r in response['results']:
-                        print(r['acl'])
-                        gf['acl'] = list(set(r['acl']).union(set(gf['acl'])))
+                        gf['acl'] = list(
+                            set(r['acl']).union(set(gf['acl'])))
                         print(gf)
                         resp = requests.patch(
                             DATASERVICE+'/genomic-files/' +
                             r['kf_id'],
                             json=gf)
-                elif resp.status_code == 502:
-                    resp = requests.get(
-                        DATASERVICE+row['_links']['genomic_files'])
+            gf_count = gf_count + 1
 
-                    if resp.status_code == 200:
-                        response = resp.json()
-                        for r in response['results']:
-                            gf['acl'] = list(
-                                set(r['acl']).union(set(gf['acl'])))
-                            print(gf)
-                            resp = requests.patch(
-                                DATASERVICE+'/genomic-files/' +
-                                r['kf_id'],
-                                json=gf)
-                gf_count = gf_count + 1
-            print("Updated {0} dbgap consent code/s for "
-                  "biospecimens in the study {1}".
-                  format(bs_count, study_id))
-            print("Updated {0} genomic_file/s acl's "
-                  "for the study {1}".
-                  format(gf_count, study_id))
+        print("Updated {0} genomic_file/s acl's "
+              "for the study {1}".
+              format(gf_count, study_id))
