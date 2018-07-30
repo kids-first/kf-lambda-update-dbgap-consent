@@ -71,6 +71,7 @@ def handler(event, context):
                                         consent_code=consent_code)
         print('updated acl'+bs_id)
     else:
+        res['genomic_file'] = 'processed all records'
         print('processed all records')
     return res
 
@@ -87,11 +88,7 @@ class AclUpdater:
         if study_id in self.external_ids:
             return self.external_ids[study_id]
         resp = requests.get(self.api+'/studies?external_id='+study_id)
-        print(self.api+'/studies?external_id='+study_id)
-        print(resp)
-        print(self.api)
         if resp.status_code == 200 and 'results' in resp.json():
-            print(resp.json()['results'])
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
             version = resp.json()['results'][0]['version']
             return self.external_ids[study_id], version
@@ -130,16 +127,20 @@ class AclUpdater:
             """
             Get the links of genomic files for that biospecimen
             """
-            print(row)
             resp = requests.get(
                 self.api+row['_links']['biospecimen_genomic_files'])
             if resp.status_code == 200 and 'results' in resp.json():
                 response = resp.json()
                 for r in response['results']:
-                    gf['acl'] = list(
-                        set(r['acl']).union(set(gf['acl'])))
                     gf_link = r['_links']['genomic_file']
-                    resp = requests.patch(
-                        self.api+gf_link,
-                        json=gf)
+                    resp = requests.get(
+                        self.api+gf_link)
+                    if resp.status_code == 200 and 'results' in resp.json():
+                        response = resp.json()
+                        gf['acl'] = list(
+                            set(response['results'][0]['acl'])
+                            .union(set(gf['acl'])))
+                        resp = requests.patch(
+                            self.api+gf_link,
+                            json=gf)
         return
