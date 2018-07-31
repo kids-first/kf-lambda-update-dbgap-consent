@@ -3,7 +3,6 @@ import os
 import json
 import xmltodict
 import boto3
-import pandas as pd
 
 from botocore.vendored import requests
 
@@ -49,32 +48,47 @@ def handler(event, context):
         return 'no dataservice url set'
 
     study = event.get('study', None)
+    lam = boto3.client('lambda')
     # # The consent code lambda ARN
-    consentcode = os.environ.get('CONSENTCODE', None)
+    consentcode = os.environ.get('FUNCTION', None)
+    studies = []
+    if study is None:
+        resp = requests.get(
+            DATASERVICE + '/studies')
+        if resp.status_code == 200 and len(resp.json()['results']) > 0:
+            for r in resp.json()['results']:
+                studies.append(study_generator(r['external_id']))
+
+                # Flush events
+                if len(studies) % BATCH_SIZE == 0:
+                    invoke(lam, consentcode, studies)
+                    studies = []
+
+            if len(studies) > 0:
+                invoke(lam, consentcode, studies)
+
     if study is None or consentcode is None:
         return 'no study or lambda specified'
 
-    # Get dbgap relaesed version from dataservice
+    # Get dbgap released version from dataservice
     resp = requests.get(
         DATASERVICE + '/studies?external_id='+study)
-    if resp.status_code == 200 and 'results' in resp.json():
+    if resp.status_code == 200 and len(resp.json()['results']) > 0:
         version = resp.json()['results'][0]['version']
 
-    bio_df = read_dbgap_xml(study['dbgap_id']+version)
-
-    lam = boto3.client('lambda')
+    dbgap_codes = read_dbgap_xml(study['dbgap_id']+version)
 
     records = 0
     invoked = 0
     events = []
-    for index, row in bio_df.iterrows():
+    for row in dbgap_codes:
         if context.get_remaining_time_in_millis()/1000 < 1:
             break
         records += 1
         events.append(event_generator(study.dbgap_id, row))
 
         # Flush events
-        if len(events) >= BATCH_SIZE:
+        if len(events) % BATCH_SIZE == 0:
             invoked += 1
             invoke(lam, consentcode, events)
             events = []
@@ -97,12 +111,9 @@ def read_dbgap_xml(accession):
     study_status = list(dict_or_list('@registration_status', data))
     accession = list(dict_or_list('@accession', data))[0]
     if study_status[0] in ['released']:
-        bio_df = pd.DataFrame()
-        bio_df['consent_code'] = list(
-            dict_or_list('@consent_code', data))
-        bio_df['external_id'] = list(
-            dict_or_list('@submitted_sample_id', data))
-        return bio_df
+        dbgap_codes = zip(dict_or_list('@consent_code', data),
+                          dict_or_list('@submitted_sample_id', data))
+        return dbgap_codes
 
 
 def invoke(lam, consentcode, records):
@@ -123,3 +134,8 @@ def event_generator(study, row):
     ev["study"]["sample_id"] = row["external_id"]
     ev["study"]["consent_code"] = row["consent_code"]
     return ev
+
+
+def study_generator(study):
+    ev = copy.deepcopy(record_template)
+    ev["study"]["dbgap_id"] = study

@@ -1,12 +1,10 @@
 import service
 import os
-import json
 import pytest
-import boto3
 from moto import mock_s3
 from mock import patch, MagicMock
 
-STUDY = 'phs001247'
+STUDY = None
 
 
 @pytest.fixture(scope='function')

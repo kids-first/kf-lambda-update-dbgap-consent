@@ -88,7 +88,7 @@ class AclUpdater:
         if study_id in self.external_ids:
             return self.external_ids[study_id]
         resp = requests.get(self.api+'/studies?external_id='+study_id)
-        if resp.status_code == 200 and 'results' in resp.json():
+        if resp.status_code == 200 and len(resp.json()['results']) > 0:
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
             version = resp.json()['results'][0]['version']
             return self.external_ids[study_id], version
@@ -97,7 +97,7 @@ class AclUpdater:
         resp = requests.get(
             self.api+'/biospecimens?study_id='+study_id +
             '&external_sample_id='+external_sample_id)
-        if resp.status_code == 200 and 'results' in resp.json():
+        if resp.status_code == 200 and len(resp.json()['results']) > 0:
             bs_id = resp.json()['results'][0]['kf_id']
             return bs_id
 
@@ -121,7 +121,7 @@ class AclUpdater:
         gf['acl'].extend((consent_code, study_id, kf_id))
         resp = requests.get(
             self.api+'/biospecimens/'+biospecimen_id)
-        if resp.status_code == 200 and 'results' in resp.json():
+        if resp.status_code == 200 and len(resp.json()['results']) > 0:
             # ds_code = resp.json()['results'][0]['dbgap_consent_code']
             row = resp.json()['results'][0]
             """
@@ -129,13 +129,14 @@ class AclUpdater:
             """
             resp = requests.get(
                 self.api+row['_links']['biospecimen_genomic_files'])
-            if resp.status_code == 200 and 'results' in resp.json():
+            if resp.status_code == 200 and len(resp.json()['results']) > 0:
                 response = resp.json()
                 for r in response['results']:
                     gf_link = r['_links']['genomic_file']
                     resp = requests.get(
                         self.api+gf_link)
-                    if resp.status_code == 200 and 'results' in resp.json():
+                    if (resp.status_code == 200 and
+                            len(resp.json()['results']) > 0):
                         response = resp.json()
                         gf['acl'] = list(
                             set(response['results'][0]['acl'])
