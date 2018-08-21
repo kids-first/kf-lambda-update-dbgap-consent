@@ -53,20 +53,7 @@ def handler(event, context):
     consentcode = os.environ.get('FUNCTION', None)
     studies = []
     if study is None:
-        resp = requests.get(
-            DATASERVICE + '/studies')
-        if resp.status_code == 200 and len(resp.json()['results']) > 0:
-            for r in resp.json()['results']:
-                studies.append(study_generator(r['external_id']))
-
-                # Flush events
-                if len(studies) % BATCH_SIZE == 0:
-                    invoke(lam, consentcode, studies)
-                    studies = []
-
-            if len(studies) > 0:
-                invoke(lam, consentcode, studies)
-
+        invoke_invidual_study_lamba(DATASERVICE, studies, lam, consentcode)
     if study is None or consentcode is None:
         return 'no study or lambda specified'
 
@@ -90,12 +77,12 @@ def handler(event, context):
         # Flush events
         if len(events) % BATCH_SIZE == 0:
             invoked += 1
-            invoke(lam, consentcode, events)
+            invoke(lam, context.function_name, events)
             events = []
 
     if len(events) > 0:
         invoked += 1
-        invoke(lam, consentcode, events)
+        invoke(lam, context.function_name, events)
 
 
 def read_dbgap_xml(accession):
@@ -139,3 +126,13 @@ def event_generator(study, row):
 def study_generator(study):
     ev = copy.deepcopy(record_template)
     ev["study"]["dbgap_id"] = study
+
+
+def invoke_invidual_study_lamba(DATASERVICE, studies, lam, consentcode):
+    resp = requests.get(DATASERVICE + '/studies?limit=100')
+    if resp.status_code == 200 and len(resp.json()['results']) > 0:
+        for r in resp.json()['results']:
+            studies.append(study_generator(r['external_id']))
+
+            if len(studies) > 0:
+                invoke(lam, consentcode, studies)
