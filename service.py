@@ -104,7 +104,7 @@ def handler(event, context):
     # if DATASERVICE is None:
     #     return 'no dataservice url set'
     DATASERVICE = 'http://localhost:1080'
-    study_id = 'phs001168'
+    study_id = 'phs001247'
     bio_df = read_dbgap_xml(study_id)
     print("Extracted {0} dbgap consent code/s for the study {1}".format(
         len(bio_df), study_id))
@@ -147,7 +147,7 @@ def handler(event, context):
                  Get the links of genomic files for that biospecimen
                 """
                 resp = requests.get(
-                    DATASERVICE+row['_links']['genomic_files'])
+                    DATASERVICE+row['_links']['biospecimen_genomic_files'])
                 """
                 Update acl in genomic_files
 
@@ -157,28 +157,51 @@ def handler(event, context):
                 if resp.status_code == 200:
                     response = resp.json()
                     for r in response['results']:
-                        print(r['acl'])
-                        gf['acl'] = list(set(r['acl']).union(set(gf['acl'])))
-                        print(gf)
-                        resp = requests.patch(
-                            DATASERVICE+'/genomic-files/' +
-                            r['kf_id'],
-                            json=gf)
+                        gf_link = r['_links']['genomic_file']
+                        resp = requests.get(
+                            DATASERVICE+gf_link)
+                        if (resp.status_code == 200 and
+                                len(resp.json()['results']) > 0):
+                            response = resp.json()
+                            print(response['results']['acl'])
+                            gf['acl'] = list(
+                                set(response['results']['acl'])
+                                .union(set(gf['acl'])))
+                            resp = requests.patch(
+                                DATASERVICE+gf_link,
+                                json=gf)
+                            print(resp, gf, gf_link)
+                            gf_count = gf_count + 1
+                        # print(r['acl'])
+                        # gf['acl'] = list(set(r['acl']).union(set(gf['acl'])))
+                        # print(gf)
+                        # resp = requests.patch(
+                        #     DATASERVICE+'/genomic-files/' +
+                        #     r['kf_id'],
+                        #     json=gf)
                 elif resp.status_code == 502:
                     resp = requests.get(
-                        DATASERVICE+row['_links']['genomic_files'])
+                        DATASERVICE+row['_links']['biospecimen_genomic_files'])
 
                     if resp.status_code == 200:
                         response = resp.json()
                         for r in response['results']:
+                            response = resp.json()
                             gf['acl'] = list(
-                                set(r['acl']).union(set(gf['acl'])))
-                            print(gf)
+                                set(response['results']['acl'])
+                                .union(set(gf['acl'])))
                             resp = requests.patch(
-                                DATASERVICE+'/genomic-files/' +
-                                r['kf_id'],
+                                DATASERVICE+gf_link,
                                 json=gf)
-                gf_count = gf_count + 1
+                            print('fail', resp, gf, gf_link)
+                            # gf['acl'] = list(
+                            #     set(r['acl']).union(set(gf['acl'])))
+                            # print(gf)
+                            # resp = requests.patch(
+                            #     DATASERVICE+'/genomic-files/' +
+                            #     r['kf_id'],
+                            #     json=gf)
+                            gf_count = gf_count + 1
             print("Updated {0} dbgap consent code/s for "
                   "biospecimens in the study {1}".
                   format(bs_count, study_id))
