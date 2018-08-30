@@ -10,12 +10,11 @@ STUDY = None
 @pytest.fixture(scope='function')
 def event():
     """ Returns a test event """
-    data = {
-        "Records": [{"study": {
+    data = {'Records': [{"study": {
             "dbgap_id": "phs001168",
             "sample_id": "PA2645",
             "consent_code": "1"
-        }}]}
+            }}]}
     return data
 
 
@@ -33,11 +32,24 @@ def test_create(event):
             resp.json.return_value = {
                 'results': [{'acl': []}]}
             return resp
+        elif '/biospecimens/' in url:
+            resp = MagicMock()
+            resp.json.return_value = {
+                '_links':
+                {'biospecimen_genomic_files':
+                 '/biospecimen-genomic-files'
+                 '?biospecimen_id = BS_HFY3Y3XM'
+                 },
+                'results': {'kf_id': url[:-11],
+                            'dbgap_consent_code': [],
+                            }}
+            resp.status_code = 200
+            return resp
         elif '/biospecimens' in url:
             resp = MagicMock()
             resp.json.return_value = {
                 'results': [{'kf_id': url[:-11],
-                             'dbgap_consent_code':[],
+                             'dbgap_consent_code': [],
                              '_links':
                              {'biospecimen_genomic_files':
                               '/biospecimen-genomic-files'

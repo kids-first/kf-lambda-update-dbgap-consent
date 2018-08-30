@@ -19,7 +19,7 @@ class DbGapException(Exception):
 def handler(event, context):
     """
     Update dbgap_consent_code in biospecimen and acl's in genomic file
-    from a list of s3 events. If all events are not processed before
+    from a list of lambda events. If all events are not processed before
     the lambda runs out of time, the remaining will be submitted to
     a new function
     """
@@ -52,7 +52,6 @@ def handler(event, context):
             )
             # Stop processing and exit
             break
-
         study = record['study']['dbgap_id']
         external_id = record["study"]["sample_id"]
         consent_code = record["study"]["consent_code"]
@@ -81,23 +80,24 @@ class AclUpdater:
     def __init__(self, api):
         self.api = api
         self.external_ids = {}
+        self.version = {}
 
     def get_study_kf_id(self, study_id):
         if study_id is None:
             return
         if study_id in self.external_ids:
-            return self.external_ids[study_id]
+            return self.external_ids[study_id], self.version[study_id]
         resp = requests.get(self.api+'/studies?external_id='+study_id)
-        if resp.status_code == 200 and len(resp.json()['results']) > 0:
+        if resp.status_code == 200 and len(resp.json()['results']) == 1:
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
-            version = resp.json()['results'][0]['version']
-            return self.external_ids[study_id], version
+            self.version[study_id] = resp.json()['results'][0]['version']
+            return self.external_ids[study_id], self.version[study_id]
 
     def get_biospecimen_kf_id(self, external_sample_id, study_id):
         resp = requests.get(
             self.api+'/biospecimens?study_id='+study_id +
             '&external_sample_id='+external_sample_id)
-        if resp.status_code == 200 and len(resp.json()['results']) > 0:
+        if resp.status_code == 200 and len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
             return bs_id
 
@@ -114,21 +114,26 @@ class AclUpdater:
             print('Updated consent code for biospecimen')
         return
 
+    def get_gfs_from_biospecimen(self, biospecimen_id):
+        resp = requests.get(
+            self.api+'/biospecimens/'+biospecimen_id)
+        if resp.status_code == 200 and len(resp.json()['results']) > 0:
+            row = resp.json()
+        return row
+
     def update_acl_genomic_file(self, kf_id, biospecimen_id,
                                 consent_code,
                                 study_id):
         gf = {"acl": []}
         gf['acl'].extend((consent_code, study_id, kf_id))
-        resp = requests.get(
-            self.api+'/biospecimens/'+biospecimen_id)
-        if resp.status_code == 200 and len(resp.json()['results']) > 0:
-            # ds_code = resp.json()['results'][0]['dbgap_consent_code']
-            row = resp.json()['results'][0]
+        row = self.get_gfs_from_biospecimen(biospecimen_id)
+        if row:
             """
             Get the links of genomic files for that biospecimen
             """
             resp = requests.get(
-                self.api+row['_links']['biospecimen_genomic_files'])
+                self.api +
+                row['_links']['biospecimen_genomic_files']+'&limit=100')
             if resp.status_code == 200 and len(resp.json()['results']) > 0:
                 response = resp.json()
                 for r in response['results']:
