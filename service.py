@@ -27,7 +27,6 @@ def handler(event, context):
 
     if DATASERVICE is None:
         return 'no dataservice url set'
-
     updater = AclUpdater(DATASERVICE)
     res = {}
     for i, record in enumerate(event['Records']):
@@ -52,26 +51,10 @@ def handler(event, context):
             )
             # Stop processing and exit
             break
-        study = record['study']['dbgap_id']
-        external_id = record["study"]["sample_id"]
-        consent_code = record["study"]["consent_code"]
-        kf_id, version = updater.get_study_kf_id(study_id=study)
-        bs_id = updater.get_biospecimen_kf_id(
-            external_sample_id=external_id,
-            study_id=kf_id)
-        print('got biospecimen'+bs_id)
-        consent_code = study+'.c' + consent_code
-        updater.update_dbgap_consent_code(biospecimen_id=bs_id,
-                                          consent_code=consent_code,
-                                          study_id=kf_id)
-        print('updated consent code'+bs_id)
-        updater.update_acl_genomic_file(kf_id=kf_id, study_id=study,
-                                        biospecimen_id=bs_id,
-                                        consent_code=consent_code)
-        print('updated acl'+bs_id)
-    else:
-        res['genomic_file'] = 'processed all records'
-        print('processed all records')
+        else:
+            # update consent code and acl
+            updater.update_acl(record)
+            res['genomic_file'] = 'processed all records'
     return res
 
 
@@ -82,7 +65,36 @@ class AclUpdater:
         self.external_ids = {}
         self.version = {}
 
+    def update_acl(self, record):
+        """
+        Gets the external sample id and consent code from dbgap and
+        updates dbgap consent code of biospecimen and acl's of genomic files
+        in dataservice
+        """
+        study = record['study']['dbgap_id']
+        external_id = record["study"]["sample_id"]
+        consent_code = record["study"]["consent_code"]
+        kf_id, version = self.get_study_kf_id(study_id=study)
+        bs_id = self.get_biospecimen_kf_id(
+            external_sample_id=external_id,
+            study_id=kf_id)
+        # if matching biospecimen is found updates the consent code
+        if bs_id:
+            consent_code = study+'.c' + consent_code
+            self.update_dbgap_consent_code(biospecimen_id=bs_id,
+                                           consent_code=consent_code,
+                                           study_id=kf_id)
+            self.update_acl_genomic_file(kf_id=kf_id, study_id=study,
+                                         biospecimen_id=bs_id,
+                                         consent_code=consent_code)
+        else:
+            print('Biospecimen doesnot exist')
+
     def get_study_kf_id(self, study_id):
+        """
+        Gets and stores the study's kf_id and version based
+        on external study id
+        """
         if study_id is None:
             return
         if study_id in self.external_ids:
@@ -94,6 +106,9 @@ class AclUpdater:
             return self.external_ids[study_id], self.version[study_id]
 
     def get_biospecimen_kf_id(self, external_sample_id, study_id):
+        """
+        Gets biospecimen kf_id based on external sample id and study kf_id
+        """
         resp = requests.get(
             self.api+'/biospecimens?study_id='+study_id +
             '&external_sample_id='+external_sample_id)
@@ -104,6 +119,9 @@ class AclUpdater:
     def update_dbgap_consent_code(self, biospecimen_id,
                                   consent_code,
                                   study_id):
+        """
+        Updates dbgap consent code for biospecimen id
+        """
         bs = {
             "dbgap_consent_code": consent_code
         }
@@ -115,15 +133,21 @@ class AclUpdater:
         return
 
     def get_gfs_from_biospecimen(self, biospecimen_id):
+        """
+        Returns the links of biospecimen
+        """
         resp = requests.get(
             self.api+'/biospecimens/'+biospecimen_id)
         if resp.status_code == 200 and len(resp.json()['results']) > 0:
             row = resp.json()
-        return row
+            return row
 
     def update_acl_genomic_file(self, kf_id, biospecimen_id,
                                 consent_code,
                                 study_id):
+        """
+        Updates acl's of genomic files taht are associated with biospecimen
+        """
         gf = {"acl": []}
         gf['acl'].extend((consent_code, study_id, kf_id))
         row = self.get_gfs_from_biospecimen(biospecimen_id)
@@ -144,9 +168,14 @@ class AclUpdater:
                             len(resp.json()['results']) > 0):
                         response = resp.json()
                         gf['acl'] = list(
-                            set(response['results'][0]['acl'])
+                            set(response['results']['acl'])
                             .union(set(gf['acl'])))
                         resp = requests.patch(
                             self.api+gf_link,
                             json=gf)
+                        if resp.status_code == 200 and len(
+                                resp.json()['results']) > 0:
+                            print('Updated acl for genomic file')
+            else:
+                return 'No associated genomic-files found'
         return

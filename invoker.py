@@ -16,6 +16,9 @@ BATCH_SIZE = 10
 
 
 def dict_or_list(key, dictionary):
+    """
+    Flattens dictionary or list to list
+    """
     if type(dictionary) != 'str':
         for k, v in dictionary.items():
             if k == key:
@@ -39,8 +42,8 @@ def handler(event, context):
 
     Will recieve an event of the form:
     ```
-    "study_id": {
-        "dbgap_id": "phs001247"
+    {
+        "study": "phs001247"
     }
     ```
     """
@@ -58,14 +61,24 @@ def handler(event, context):
     if study is None:
         invoke_invidual_study_lamba(
             DATASERVICE, lam, context.function_name)
-        return
+    elif study and consentcode:
+        print('Calling study with study id ', study)
+        invoke_individual_study(study, lam, consentcode, context, DATASERVICE)
+
+
+def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
+    """
+    invokes lambda for specific study
+    """
     # Get dbgap released version from dataservice
     resp = requests.get(
-        DATASERVICE + '/studies?external_id='+study["dbgap_id"])
+        DATASERVICE + '/studies?external_id='+study)
     if resp.status_code == 200 and len(resp.json()['results']) == 1:
         version = resp.json()['results'][0]['version']
-        dbgap_codes = read_dbgap_xml(study['dbgap_id']+'.'+version)
-
+        if version:
+            dbgap_codes = read_dbgap_xml(study+'.'+version)
+        else:
+            print('No study version Found')
         records = 0
         invoked = 0
         events = []
@@ -75,17 +88,19 @@ def handler(event, context):
                       're-invoking the function'.format(row))
                 break
                 records += 1
-            events.append(event_generator(study['dbgap_id'], row))
+            events.append(event_generator(study, row))
 
             # Flush events
-            if len(events) % BATCH_SIZE == 0:
+            if len(events)+1 % BATCH_SIZE == 0:
                 invoked += 1
                 invoke(lam, consentcode, events)
                 events = []
 
-            if len(events) > 0:
-                invoked += 1
-                invoke(lam, consentcode, events)
+        if len(events) > 0:
+            invoked += 1
+            invoke(lam, consentcode, events)
+    else:
+        print('Study is not dbgap study')
 
 
 def read_dbgap_xml(accession):
@@ -97,12 +112,17 @@ def read_dbgap_xml(accession):
     url = "https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/GetSampleStatus.cgi?study_id=" + \
         accession+"&rettype=xml"
     data = requests.get(url)
-    data = xmltodict.parse(data.content)
-    study_status = list(dict_or_list('@registration_status', data))
-    if study_status[0] in ['released']:
-        dbgap_codes = zip(dict_or_list('@consent_code', data),
-                          dict_or_list('@submitted_sample_id', data))
-    return dbgap_codes
+    if data.status_code == 200:
+        data = xmltodict.parse(data.content)
+        study_status = list(dict_or_list('@registration_status', data))
+        if study_status[0] in ['released']:
+            dbgap_codes = zip(dict_or_list('@consent_code', data),
+                              dict_or_list('@submitted_sample_id', data))
+            return dbgap_codes
+        else:
+            return 'study is not released by dbgap'
+    else:
+        return 'study with version doesnt exist in dbgap or bad request'
 
 
 def invoke(lam, consentcode, records):
@@ -118,6 +138,9 @@ def invoke(lam, consentcode, records):
 
 
 def event_generator(study, row):
+    """
+    Generates events for each sample in dbgap
+    """
     ev = copy.deepcopy(record_template)
     ev["study"]["dbgap_id"] = study
     ev["study"]["sample_id"] = row[1]
@@ -125,13 +148,16 @@ def event_generator(study, row):
     return ev
 
 
-def study_generator(study):
-    ev = copy.deepcopy(record_template)
-    ev["study"]["dbgap_id"] = study
-
-
-def invoke_invidual_study_lamba(DATASERVICE, lam, consentcode):
+def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
+    """
+    invokes lambda for individual study
+    """
     resp = requests.get(DATASERVICE + '/studies?limit=100')
     if resp.status_code == 200 and len(resp.json()['results']) > 0:
         for r in resp.json()['results']:
-            invoke(lam, consentcode, study_generator(r['external_id']))
+            payload = {'study': r['external_id']}
+            response = lam.invoke(
+                FunctionName=invoker_func,
+                InvocationType='Event',
+                Payload=str.encode(json.dumps(payload)),
+            )

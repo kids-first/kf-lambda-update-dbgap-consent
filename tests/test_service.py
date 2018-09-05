@@ -26,7 +26,13 @@ def test_create(event):
     req = mock.start()
 
     def mock_get(url, *args, **kwargs):
-        if '/genomic-files' in url:
+        if '/genomic-files/' in url:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                'results': {'acl': []}}
+            return resp
+        elif '/genomic-files' in url:
             resp = MagicMock()
             resp.status_code = 200
             resp.json.return_value = {
