@@ -75,15 +75,17 @@ class AclUpdater:
         external_id = record["study"]["sample_id"]
         consent_code = record["study"]["consent_code"]
         kf_id, version = self.get_study_kf_id(study_id=study)
-        bs_id = self.get_biospecimen_kf_id(
+        bs_id, dbgap_cons_code = self.get_biospecimen_kf_id(
             external_sample_id=external_id,
             study_id=kf_id)
         # if matching biospecimen is found updates the consent code
         if bs_id:
             consent_code = study+'.c' + consent_code
-            self.update_dbgap_consent_code(biospecimen_id=bs_id,
-                                           consent_code=consent_code,
-                                           study_id=kf_id)
+            # Do not update biospecimen if consent code is not changed
+            if dbgap_cons_code != consent_code:
+                self.update_dbgap_consent_code(biospecimen_id=bs_id,
+                                               consent_code=consent_code,
+                                               study_id=kf_id)
             self.update_acl_genomic_file(kf_id=kf_id, study_id=study,
                                          biospecimen_id=bs_id,
                                          consent_code=consent_code)
@@ -114,7 +116,8 @@ class AclUpdater:
             '&external_sample_id='+external_sample_id)
         if resp.status_code == 200 and len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
-            return bs_id
+            dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
+            return bs_id, dbgap_cons_code
 
     def update_dbgap_consent_code(self, biospecimen_id,
                                   consent_code,
@@ -168,7 +171,6 @@ class AclUpdater:
             if (resp.status_code == 200 and
                     len(resp.json()['results']) > 0):
                 response = resp.json()
-                gf['acl'] = list(set(gf['acl']))
                 resp = requests.patch(
                     self.api+gf_link,
                     json=gf)
