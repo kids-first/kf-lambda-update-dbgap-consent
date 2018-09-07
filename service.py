@@ -88,7 +88,7 @@ class AclUpdater:
                                          biospecimen_id=bs_id,
                                          consent_code=consent_code)
         else:
-            print('Biospecimen doesnot exist')
+            print('Biospecimen does not exist')
 
     def get_study_kf_id(self, study_id):
         """
@@ -140,7 +140,12 @@ class AclUpdater:
             self.api+'/biospecimens/'+biospecimen_id)
         if resp.status_code == 200 and len(resp.json()['results']) > 0:
             row = resp.json()
-            return row
+            resp = requests.get(
+                self.api +
+                row['_links']['biospecimen_genomic_files']+'&limit=100')
+            if resp.status_code == 200 and len(resp.json()['results']) > 0:
+                response = resp.json()
+                return response
 
     def update_acl_genomic_file(self, kf_id, biospecimen_id,
                                 consent_code,
@@ -150,32 +155,24 @@ class AclUpdater:
         """
         gf = {"acl": []}
         gf['acl'].extend((consent_code, study_id, kf_id))
-        row = self.get_gfs_from_biospecimen(biospecimen_id)
-        if row:
-            """
-            Get the links of genomic files for that biospecimen
-            """
+        response = self.get_gfs_from_biospecimen(biospecimen_id)
+        if not response:
+            return 'No associated genomic-files found'
+        """
+        Get the links of genomic files for that biospecimen
+        """
+        for r in response['results']:
+            gf_link = r['_links']['genomic_file']
             resp = requests.get(
-                self.api +
-                row['_links']['biospecimen_genomic_files']+'&limit=100')
-            if resp.status_code == 200 and len(resp.json()['results']) > 0:
+                self.api+gf_link)
+            if (resp.status_code == 200 and
+                    len(resp.json()['results']) > 0):
                 response = resp.json()
-                for r in response['results']:
-                    gf_link = r['_links']['genomic_file']
-                    resp = requests.get(
-                        self.api+gf_link)
-                    if (resp.status_code == 200 and
-                            len(resp.json()['results']) > 0):
-                        response = resp.json()
-                        gf['acl'] = list(
-                            set(response['results']['acl'])
-                            .union(set(gf['acl'])))
-                        resp = requests.patch(
-                            self.api+gf_link,
-                            json=gf)
-                        if resp.status_code == 200 and len(
-                                resp.json()['results']) > 0:
-                            print('Updated acl for genomic file')
-            else:
-                return 'No associated genomic-files found'
+                gf['acl'] = list(set(gf['acl']))
+                resp = requests.patch(
+                    self.api+gf_link,
+                    json=gf)
+                if resp.status_code == 200 and len(
+                        resp.json()['results']) > 0:
+                    print('Updated acl for genomic file')
         return

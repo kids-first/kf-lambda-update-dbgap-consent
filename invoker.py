@@ -78,16 +78,10 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
         if version:
             dbgap_codes = read_dbgap_xml(study+'.'+version)
         else:
-            print('No study version Found')
-        records = 0
+            return 'No study version found'
         invoked = 0
         events = []
         for row in dbgap_codes:
-            if context.get_remaining_time_in_millis()/1000 < 1:
-                print('not able to complete {} record, '
-                      're-invoking the function'.format(row))
-                break
-                records += 1
             events.append(event_generator(study, row))
 
             # Flush events
@@ -120,9 +114,9 @@ def read_dbgap_xml(accession):
                               dict_or_list('@submitted_sample_id', data))
             return dbgap_codes
         else:
-            return 'study is not released by dbgap'
+            return 'Study is not released by dbgap'
     else:
-        return 'study with version doesnt exist in dbgap or bad request'
+        return 'Study with version doesnt exist in dbgap or bad request'
 
 
 def invoke(lam, consentcode, records):
