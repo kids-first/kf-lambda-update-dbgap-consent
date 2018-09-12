@@ -15,6 +15,10 @@ record_template = {
 BATCH_SIZE = 10
 
 
+class DbGapException(Exception):
+    pass
+
+
 def dict_or_list(key, dictionary):
     """
     Flattens dictionary or list to list
@@ -62,8 +66,10 @@ def handler(event, context):
         invoke_invidual_study_lamba(
             DATASERVICE, lam, context.function_name)
     elif study and consentcode:
-        print('Calling study with study id ', study)
-        invoke_individual_study(study, lam, consentcode, context, DATASERVICE)
+        print('Try calling study with study id ', study)
+        status = invoke_individual_study(
+            study, lam, consentcode, context, DATASERVICE)
+        print(status)
 
 
 def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
@@ -73,28 +79,26 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
     # Get dbgap released version from dataservice
     resp = requests.get(
         DATASERVICE + '/studies?external_id='+study)
-    if resp.status_code == 200 and len(resp.json()['results']) == 1:
-        version = resp.json()['results'][0]['version']
-        if version:
-            dbgap_codes = read_dbgap_xml(study+'.'+version)
-        else:
-            return 'No study version found'
-        invoked = 0
-        events = []
-        for row in dbgap_codes:
-            events.append(event_generator(study, row))
+    if resp.status_code != 200 and len(resp.json()['results']) != 1:
+        return 'No unique study found with external id'
+    version = resp.json()['results'][0]['version']
+    if not version:
+        return 'No version found for study'
+    dbgap_codes = read_dbgap_xml(study+'.'+version)
+    invoked = 0
+    events = []
+    for row in dbgap_codes:
+        events.append(event_generator(study, row))
 
-            # Flush events
-            if len(events)+1 % BATCH_SIZE == 0:
-                invoked += 1
-                invoke(lam, consentcode, events)
-                events = []
-
-        if len(events) > 0:
+        # Flush events
+        if len(events)+1 % BATCH_SIZE == 0:
             invoked += 1
             invoke(lam, consentcode, events)
-    else:
-        print('Study is not dbgap study')
+            events = []
+
+    if len(events) > 0:
+        invoked += 1
+        invoke(lam, consentcode, events)
 
 
 def read_dbgap_xml(accession):
@@ -106,17 +110,17 @@ def read_dbgap_xml(accession):
     url = "https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/GetSampleStatus.cgi?study_id=" + \
         accession+"&rettype=xml"
     data = requests.get(url)
-    if data.status_code == 200:
-        data = xmltodict.parse(data.content)
-        study_status = list(dict_or_list('@registration_status', data))
-        if study_status[0] in ['released']:
-            dbgap_codes = zip(dict_or_list('@consent_code', data),
-                              dict_or_list('@submitted_sample_id', data))
-            return dbgap_codes
-        else:
-            return 'Study is not released by dbgap'
+    if data.status_code != 200:
+        raise DbGapException('Study with version doesnt exist in '
+                             'dbgap or bad request')
+    data = xmltodict.parse(data.content)
+    study_status = list(dict_or_list('@registration_status', data))
+    if study_status[0] in ['released']:
+        dbgap_codes = zip(dict_or_list('@consent_code', data),
+                          dict_or_list('@submitted_sample_id', data))
+        return dbgap_codes
     else:
-        return 'Study with version doesnt exist in dbgap or bad request'
+        raise DbGapException('study is not released by dbgap')
 
 
 def invoke(lam, consentcode, records):
