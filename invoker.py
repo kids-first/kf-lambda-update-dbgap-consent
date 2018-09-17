@@ -3,6 +3,7 @@ import os
 import json
 import xmltodict
 import boto3
+from base64 import b64decode
 
 from botocore.vendored import requests
 
@@ -13,6 +14,12 @@ record_template = {
 }
 
 BATCH_SIZE = 10
+SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
+SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
+SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
+kms = boto3.client('kms', region_name='us-east-1')
+SLACK_TOKEN = kms.decrypt(CiphertextBlob=b64decode(
+    SLACK_TOKEN)).get('Plaintext', None).decode('utf-8')
 
 
 class DbGapException(Exception):
@@ -87,6 +94,13 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
     dbgap_codes = read_dbgap_xml(study+'.'+version)
     invoked = 0
     events = []
+    attachments = [
+        {"fallback": "I'm about to update consent codes for study `{}`,' hold tight...".format(study),
+         "text": "I'm about to update consent codes for study `{}`, hold tight...".format(study),
+         "color": "#005e99"
+         }
+    ]
+    send_slack(attachments=attachments)
     for row in dbgap_codes:
         events.append(event_generator(study, row))
 
@@ -99,6 +113,21 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
     if len(events) > 0:
         invoked += 1
         invoke(lam, consentcode, events)
+
+    attachments = [
+        {"fallback": "Finished invokes for study `{}`".format(study),
+         "text": "Finished invokes for study `{}`".format(study),
+         "fields": [
+            {
+                "title": "Function Calls",
+                "value": invoked,
+                "short": True
+            }
+        ],
+            "color": "good"
+        }
+    ]
+    send_slack(attachments=attachments)
 
 
 def read_dbgap_xml(accession):
@@ -159,3 +188,25 @@ def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
                 InvocationType='Event',
                 Payload=str.encode(json.dumps(payload)),
             )
+
+
+def send_slack(msg=None, attachments=None):
+    """
+    Sends a slack notification
+    """
+    if SLACK_TOKEN is not None:
+        for channel in SLACK_CHANNELS:
+            message = {
+                'username': 'Consent Updater',
+                'icon_emoji': ':file_folder:',
+                'channel': channel
+            }
+            if msg:
+                message['text'] = msg
+            if attachments:
+                message['attachments'] = attachments
+
+            resp = requests.post('https://slack.com/api/chat.postMessage',
+                                 headers={
+                                     'Authorization': 'Bearer '+SLACK_TOKEN},
+                                 json=message)

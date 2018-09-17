@@ -30,7 +30,6 @@ def handler(event, context):
                   're-invoking the function'.format(len(records)))
             remaining = {'Records': records}
             lam = boto3.client('lambda')
-            context.invoked_function_arn
             # Invoke the lambda again with remaining records
             response = lam.invoke(
                 FunctionName=context.invoked_function_arn,
