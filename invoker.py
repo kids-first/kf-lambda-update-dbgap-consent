@@ -77,9 +77,20 @@ def handler(event, context):
         status = invoke_individual_study(
             study, lam, consentcode, context, DATASERVICE)
         print(status)
+        if status:
+            attachments = [
+                {"fallback": "Failed to invoke update for "
+                 "study `{}`, message:{}".format(study, status),
+                 "text": "Failed to invoke update for "
+                 "study `{}`, message:{}".format(study, status),
+                 "color": "danger"
+                 }
+            ]
+            send_slack(attachments=attachments)
 
 
-def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
+def invoke_individual_study(study, lam, consentcode,
+                            context, DATASERVICE):
     """
     invokes lambda for specific study
     """
@@ -94,13 +105,6 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
     dbgap_codes = read_dbgap_xml(study+'.'+version)
     invoked = 0
     events = []
-    attachments = [
-        {"fallback": "I'm about to update consent codes for study `{}`,' hold tight...".format(study),
-         "text": "I'm about to update consent codes for study `{}`, hold tight...".format(study),
-         "color": "#005e99"
-         }
-    ]
-    send_slack(attachments=attachments)
     for row in dbgap_codes:
         events.append(event_generator(study, row))
 
@@ -113,21 +117,6 @@ def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
     if len(events) > 0:
         invoked += 1
         invoke(lam, consentcode, events)
-
-    attachments = [
-        {"fallback": "Finished invokes for study `{}`".format(study),
-         "text": "Finished invokes for study `{}`".format(study),
-         "fields": [
-            {
-                "title": "Function Calls",
-                "value": invoked,
-                "short": True
-            }
-        ],
-            "color": "good"
-        }
-    ]
-    send_slack(attachments=attachments)
 
 
 def read_dbgap_xml(accession):
@@ -180,6 +169,16 @@ def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
     invokes lambda for individual study
     """
     resp = requests.get(DATASERVICE + '/studies?limit=100')
+    total = len(resp.json()['results'])
+    attachments = [
+        {"fallback": "I'm about to update consent codes"
+         " for `{}` studies,' hold tight...".format(total),
+         "text": "I'm about to update consent codes"
+         " for `{}` studies,' hold tight...".format(total),
+         "color": "#005e99"
+         }
+    ]
+    send_slack(attachments=attachments)
     if resp.status_code == 200 and len(resp.json()['results']) > 0:
         for r in resp.json()['results']:
             payload = {'study': r['external_id']}
