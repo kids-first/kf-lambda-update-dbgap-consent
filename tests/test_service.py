@@ -13,7 +13,8 @@ def event():
     data = {'Records': [{"study": {
             "dbgap_id": "phs001168",
             "sample_id": "PA2645",
-            "consent_code": "1"
+            "consent_code": "1",
+            "consent_short_name": "IRB"
             }}]}
     return data
 
@@ -48,6 +49,7 @@ def test_create(event):
                  },
                 'results': {'kf_id': url[:-11],
                             'dbgap_consent_code': [],
+                            "consent_short_name": None
                             }}
             resp.status_code = 200
             return resp

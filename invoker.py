@@ -135,7 +135,8 @@ def read_dbgap_xml(accession):
     study_status = list(dict_or_list('@registration_status', data))
     if study_status[0] in ['released']:
         dbgap_codes = zip(dict_or_list('@consent_code', data),
-                          dict_or_list('@submitted_sample_id', data))
+                          dict_or_list('@submitted_sample_id', data),
+                          dict_or_list('@consent_short_name', data))
         return dbgap_codes
     else:
         raise DbGapException('study is not released by dbgap')
@@ -161,6 +162,7 @@ def event_generator(study, row):
     ev["study"]["dbgap_id"] = study
     ev["study"]["sample_id"] = row[1]
     ev["study"]["consent_code"] = row[0]
+    ev["study"]["consent_short_name"] = row[0]
     return ev
 
 
