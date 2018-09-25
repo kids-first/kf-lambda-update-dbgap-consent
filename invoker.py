@@ -3,6 +3,7 @@ import os
 import json
 import xmltodict
 import boto3
+from base64 import b64decode
 
 from botocore.vendored import requests
 
@@ -13,6 +14,12 @@ record_template = {
 }
 
 BATCH_SIZE = 10
+SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
+SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
+SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
+kms = boto3.client('kms', region_name='us-east-1')
+SLACK_TOKEN = kms.decrypt(CiphertextBlob=b64decode(
+    SLACK_TOKEN)).get('Plaintext', None).decode('utf-8')
 
 
 class DbGapException(Exception):
@@ -70,9 +77,20 @@ def handler(event, context):
         status = invoke_individual_study(
             study, lam, consentcode, context, DATASERVICE)
         print(status)
+        if status:
+            attachments = [
+                {"fallback": "Failed to invoke update for "
+                 "study `{}`, message:{}".format(study, status),
+                 "text": "Failed to invoke update for "
+                 "study `{}`, message:{}".format(study, status),
+                 "color": "danger"
+                 }
+            ]
+            send_slack(attachments=attachments)
 
 
-def invoke_individual_study(study, lam, consentcode, context, DATASERVICE):
+def invoke_individual_study(study, lam, consentcode,
+                            context, DATASERVICE):
     """
     invokes lambda for specific study
     """
@@ -151,6 +169,16 @@ def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
     invokes lambda for individual study
     """
     resp = requests.get(DATASERVICE + '/studies?limit=100')
+    total = len(resp.json()['results'])
+    attachments = [
+        {"fallback": "I'm about to update consent codes"
+         " for `{}` studies,' hold tight...".format(total),
+         "text": "I'm about to update consent codes"
+         " for `{}` studies,' hold tight...".format(total),
+         "color": "#005e99"
+         }
+    ]
+    send_slack(attachments=attachments)
     if resp.status_code == 200 and len(resp.json()['results']) > 0:
         for r in resp.json()['results']:
             payload = {'study': r['external_id']}
@@ -159,3 +187,25 @@ def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
                 InvocationType='Event',
                 Payload=str.encode(json.dumps(payload)),
             )
+
+
+def send_slack(msg=None, attachments=None):
+    """
+    Sends a slack notification
+    """
+    if SLACK_TOKEN is not None:
+        for channel in SLACK_CHANNELS:
+            message = {
+                'username': 'Consent Updater',
+                'icon_emoji': ':file_folder:',
+                'channel': channel
+            }
+            if msg:
+                message['text'] = msg
+            if attachments:
+                message['attachments'] = attachments
+
+            resp = requests.post('https://slack.com/api/chat.postMessage',
+                                 headers={
+                                     'Authorization': 'Bearer '+SLACK_TOKEN},
+                                 json=message)
