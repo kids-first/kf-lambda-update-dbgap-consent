@@ -162,7 +162,7 @@ def event_generator(study, row):
     ev["study"]["dbgap_id"] = study
     ev["study"]["sample_id"] = row[1]
     ev["study"]["consent_code"] = row[0]
-    ev["study"]["consent_short_name"] = row[0]
+    ev["study"]["consent_short_name"] = row[2]
     return ev
 
 
