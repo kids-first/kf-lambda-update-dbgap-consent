@@ -61,8 +61,9 @@ class AclUpdater:
         study = record['study']['dbgap_id']
         external_id = record["study"]["sample_id"]
         consent_code = record["study"]["consent_code"]
+        cons_short_name = record["study"]["consent_short_name"]
         kf_id, version = self.get_study_kf_id(study_id=study)
-        bs_id, dbgap_cons_code = self.get_biospecimen_kf_id(
+        bs_id, dbgap_cons_code, consent_type = self.get_biospecimen_kf_id(
             external_sample_id=external_id,
             study_id=kf_id)
         # if matching biospecimen is found updates the consent code
@@ -70,9 +71,10 @@ class AclUpdater:
             return 'Biospecimen does not exist'
         consent_code = study+'.c' + consent_code
         # Do not update biospecimen if consent code is not changed
-        if dbgap_cons_code != consent_code:
+        if dbgap_cons_code != consent_code or consent_type != cons_short_name:
             self.update_dbgap_consent_code(biospecimen_id=bs_id,
                                            consent_code=consent_code,
+                                           consent_short_name=cons_short_name,
                                            study_id=kf_id)
         self.update_acl_genomic_file(kf_id=kf_id, study_id=study,
                                      biospecimen_id=bs_id,
@@ -103,17 +105,18 @@ class AclUpdater:
         if resp.status_code == 200 and len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
             dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
-            return bs_id, dbgap_cons_code
+            consent_type = resp.json()['results'][0]['consent_type']
+            return bs_id, dbgap_cons_code, consent_type
 
     def update_dbgap_consent_code(self, biospecimen_id,
-                                  consent_code,
+                                  consent_code, consent_short_name,
                                   study_id):
         """
         Updates dbgap consent code for biospecimen id
         """
         bs = {
-            "dbgap_consent_code": consent_code
-        }
+            "dbgap_consent_code": consent_code,
+            "consent_type": consent_short_name}
         resp = requests.patch(
             self.api+'/biospecimens/'+biospecimen_id,
             json=bs)
