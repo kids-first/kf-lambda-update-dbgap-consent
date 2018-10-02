@@ -50,7 +50,8 @@ def test_create(event):
                 'results': {'kf_id': url[:-11],
                             'dbgap_consent_code': [],
                             "consent_short_name": None,
-                            'consent_type': None
+                            'consent_type': None,
+                            'visible': None
                             }}
             resp.status_code = 200
             return resp
@@ -60,6 +61,7 @@ def test_create(event):
                 'results': [{'kf_id': url[:-11],
                              'dbgap_consent_code': [],
                              'consent_type': None,
+                             'visible': None,
                              '_links':
                              {'biospecimen_genomic_files':
                               '/biospecimen-genomic-files'
