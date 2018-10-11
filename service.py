@@ -63,22 +63,27 @@ class AclUpdater:
         consent_code = record["study"]["consent_code"]
         cons_short_name = record["study"]["consent_short_name"]
         kf_id, version = self.get_study_kf_id(study_id=study)
-        bs_id, dbgap_cons_code, consent_type = self.get_biospecimen_kf_id(
+        (bs_id, dbgap_cons_code,
+         consent_type, visible) = self.get_biospecimen_kf_id(
             external_sample_id=external_id,
             study_id=kf_id)
         # if matching biospecimen is found updates the consent code
         if not bs_id:
             return 'Biospecimen does not exist'
-        consent_code = study+'.c' + consent_code
+
+        gf = {"acl": []}
+        if not visible:
+            consent_code = None
+        else:
+            consent_code = study+'.c' + consent_code
+            gf['acl'].extend((consent_code, study, kf_id))
+
         # Do not update biospecimen if consent code is not changed
         if dbgap_cons_code != consent_code or consent_type != cons_short_name:
             self.update_dbgap_consent_code(biospecimen_id=bs_id,
                                            consent_code=consent_code,
-                                           consent_short_name=cons_short_name,
-                                           study_id=kf_id)
-        self.update_acl_genomic_file(kf_id=kf_id, study_id=study,
-                                     biospecimen_id=bs_id,
-                                     consent_code=consent_code)
+                                           consent_short_name=cons_short_name)
+        self.update_acl_genomic_file(biospecimen_id=bs_id, gf=gf)
 
     def get_study_kf_id(self, study_id):
         """
@@ -106,11 +111,11 @@ class AclUpdater:
             bs_id = resp.json()['results'][0]['kf_id']
             dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
             consent_type = resp.json()['results'][0]['consent_type']
-            return bs_id, dbgap_cons_code, consent_type
+            visible = resp.json()['results'][0]['visible']
+            return bs_id, dbgap_cons_code, consent_type, visible
 
     def update_dbgap_consent_code(self, biospecimen_id,
-                                  consent_code, consent_short_name,
-                                  study_id):
+                                  consent_code, consent_short_name):
         """
         Updates dbgap consent code for biospecimen id
         """
@@ -140,14 +145,10 @@ class AclUpdater:
             return 'No associated biospecimen-genomic-files found'
         return resp.json()
 
-    def update_acl_genomic_file(self, kf_id, biospecimen_id,
-                                consent_code,
-                                study_id):
+    def update_acl_genomic_file(self, gf, biospecimen_id):
         """
-        Updates acl's of genomic files taht are associated with biospecimen
+        Updates acl's of genomic files that are associated with biospecimen
         """
-        gf = {"acl": []}
-        gf['acl'].extend((consent_code, study_id, kf_id))
         response = self.get_gfs_from_biospecimen(biospecimen_id)
         """
         Get the links of genomic files for that biospecimen
