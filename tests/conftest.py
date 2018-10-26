@@ -43,11 +43,13 @@ def mock_dataservice():
 
     class MockDataservice():
 
-        def __init__(self, r, status_code=200, many=False, no_version=False):
+        def __init__(self, r, status_code=200, many=False, no_version=False,
+                     no_results=False):
             self.request = r
             self.status_code = status_code
             self.many = many
             self.no_version = no_version
+            self.no_results = no_results
 
         @property
         def content(self):
@@ -77,5 +79,16 @@ def mock_dataservice():
                     return {
                         'results': []
                     }
+            elif self.request.endswith('/studies?limit=100'):
+                if self.no_results:
+                    return {'results': [], 'total': 0}
+
+                return {
+                    'results': [
+                        {'kf_id': 'SD_00000000', 'external_id': 'phs001228'}
+                    ],
+                    'total': 1
+                }
+                
 
     return MockDataservice

@@ -198,23 +198,34 @@ def event_generator(study, row):
     return ev
 
 
-def map_to_studies(DATASERVICE, lam, invoker_func):
+def map_to_studies(lam, invoker_func, dataservice_api):
     """
     Gets all studies in the dataservice and re-calls this lambda for each
     providing the study_id as a parameter in the event.
+
+    :param lam: A boto lambda client used to invoke lamda functions
+    :param invoker_func: The name of the current function to call again to
+        process a given study
+    :param dataservice_api: The url of the dataservice api
     """
-    resp = requests.get(DATASERVICE + '/studies?limit=100')
+    url = f'{dataservice_api}/studies?limit=100'
+    resp = requests.get(url)
 
-    if resp.status_code == 200 and len(resp.json()['results']) > 0:
-        for r in resp.json()['results']:
-            payload = {'study': r['external_id']}
-            response = lam.invoke(
-                FunctionName=invoker_func,
-                InvocationType='Event',
-                Payload=str.encode(json.dumps(payload)),
-            )
+    if resp.status_code != 200:
+        raise DataserviceException(f'Problem requesting dataservice: '
+                                   f'{url}, {resp.content}')
+    if 'total' not in resp.json() or resp.json()['total'] == 0:
+        raise DataserviceException(f'Dataservice has no studies')
 
-    total = len(resp.json()['results'])
+    for r in resp.json()['results']:
+        payload = {'study': r['external_id']}
+        response = lam.invoke(
+            FunctionName=invoker_func,
+            InvocationType='Event',
+            Payload=str.encode(json.dumps(payload)),
+        )
+
+    total = resp.json()['total']
     attachments = [
         {"fallback": "I'm about to update consent codes"
          " for `{}` studies,' hold tight...".format(total),

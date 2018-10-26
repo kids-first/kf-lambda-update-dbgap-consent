@@ -155,3 +155,64 @@ def test_map_one_study_no_version(mock_dbgap, mock_dataservice):
         r = invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
 
     assert 'phs001228 has no version in dataservice' in str(err.value)
+
+
+def test_map_to_studies(mock_dbgap, mock_dataservice):
+    """ Test that the invoker is called for each study """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    invoker.map_to_studies(lam, 'invoker_func', 'http://ds')
+    assert req.get.call_count == 1
+    assert lam.invoke.call_count == 1
+
+
+def test_map_to_studies_bad_response(mock_dbgap, mock_dataservice):
+    """ Test behavior when dataservice returns a bad response """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, status_code=500, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        invoker.map_to_studies(lam, 'invoker_func', 'http://ds')
+    assert req.get.call_count == 1
+    assert 'Problem requesting dataservice' in str(err.value)
+    assert lam.invoke.call_count == 0
+
+
+def test_map_to_studies_no_results(mock_dbgap, mock_dataservice):
+    """ Test behavior when dataservice returns no studies """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, no_results=True, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        invoker.map_to_studies(lam, 'invoker_func', 'http://ds')
+    assert req.get.call_count == 1
+    assert 'Dataservice has no studies' in str(err.value)
+    assert lam.invoke.call_count == 0
