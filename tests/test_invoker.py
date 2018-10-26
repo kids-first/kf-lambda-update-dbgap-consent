@@ -1,4 +1,5 @@
 import os
+import json
 import pytest
 from mock import patch, MagicMock
 import invoker
@@ -43,3 +44,114 @@ def test_read_dbgap_xml_not_released(mock_dbgap):
 
         assert 'study phs001228 not released' in err
         assert 'registration_status: completed_by_gpa' in err
+
+
+def test_map_one_study(mock_dbgap, mock_dataservice):
+    """ Test that functions are called for each sample in the dbGaP xml """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
+
+    # Should be called in batches of 10 plus one for remainder
+    assert lam.invoke.call_count == 112
+    # Check one of the calls to lambda were made with the right payload
+    call = lam.invoke.call_args_list[0]
+    assert call[1]['FunctionName'] == 'consent_func'
+    assert call[1]['InvocationType'] == 'Event'
+    payload = json.loads(call[1]['Payload'])
+    assert 'Records' in payload
+    assert len(payload['Records']) == 10
+    assert 'study' in payload['Records'][0]
+    assert payload['Records'][0]['study']['consent_code'] == '1'
+    assert payload['Records'][0]['study']['consent_short_name'] == 'GRU'
+    assert payload['Records'][0]['study']['dbgap_id'] == 'phs001228'
+    assert 'sample_id' in payload['Records'][0]['study']
+
+
+def test_map_one_study_bad_ds_resp(mock_dbgap, mock_dataservice):
+    """ Test behavior when the dataservice responds with non-200 """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, status_code=500, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
+    assert 'Problem requesting dataservice: ' in str(err.value)
+
+
+def test_map_one_study_non_unique(mock_dbgap, mock_dataservice):
+    """ Test behavior when given phs id returns multiple studies """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, many=True, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        r = invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
+
+    assert 'More than one study found for phs001228' in str(err.value)
+
+
+def test_map_one_study_no_results(mock_dbgap, mock_dataservice):
+    """ Test behavior when no study is returned for given phs is """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        r = invoker.map_one_study('NOTFOUND', lam, 'consent_func', 'http://ds')
+
+    assert 'Could not find a study for NOTFOUND' in str(err.value)
+
+
+def test_map_one_study_no_version(mock_dbgap, mock_dataservice):
+    """ Test behavior when a study with no version is returned """
+    mock_req = patch('invoker.requests')
+    req = mock_req.start()
+
+    def router(r, *args, **kwargs):
+        if r.startswith('http://ds'):
+            return mock_dataservice(r, no_version=True, *args, **kwargs)
+        else:
+            return mock_dbgap()
+
+    req.get.side_effect = router
+
+    lam = MagicMock()
+    with pytest.raises(invoker.DataserviceException) as err:
+        r = invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
+
+    assert 'phs001228 has no version in dataservice' in str(err.value)

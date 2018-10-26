@@ -28,6 +28,10 @@ class DbGapException(Exception):
     pass
 
 
+class DataserviceException(Exception):
+    pass
+
+
 def dict_or_list(key, dictionary):
     """
     Flattens dictionary or list to list
@@ -81,32 +85,51 @@ def handler(event, context):
         map_to_studies(lam, context.function_name, DATASERVICE)
     # Call functions for each sample in the study
     elif study and consentcode:
-        status = map_one_study(study, lam, consentcode, context, DATASERVICE)
-        if status:
-            attachments = [
-                {"fallback": "Failed to invoke update for "
-                 "study `{}`, message:{}".format(study, status),
-                 "text": "Failed to invoke update for "
-                 "study `{}`, message:{}".format(study, status),
-                 "color": "danger"
-                 }
-            ]
+        try:
+            map_one_study(study, lam, consentcode_func, context, DATASERVICE)
+        except (DataserviceException, DbGapException) as err:
+            # There was a problem trying to process the study, notify slack
+            msg = f'Problem invoking for `{study}`: {err}'
+            attachments = [{
+                'fallback': msg,
+                'text': msg,
+                'color': 'danger'
+            }]
             send_slack(attachments=attachments)
 
 
-def map_one_study(study, lam, consentcode, context, DATASERVICE):
+def map_one_study(study, lam, consentcode, dataservice_api):
     """
     Attempt to load a dbGaP xml for a study and call a function for each
     sample to update 
+
+    :param study: The dbGaP study_id
+    :param lam: A boto lambda client used to invoke lamda functions
+    :param consentcode: The name of the function that will be called for each
+        sample to update it inside the dataservice
+    :param dataservice_api: The url of the dataservice api
     """
     # Get dbgap released version from dataservice
-    resp = requests.get(DATASERVICE + '/studies?external_id='+study)
-    if resp.status_code != 200 and len(resp.json()['results']) != 1:
-        return 'No unique study found with external id'
+    url = f'{dataservice_api}/studies?external_id={study}'
+    resp = requests.get(url)
+
+    # Problem with the request
+    if resp.status_code != 200:
+        raise DataserviceException(f'Problem requesting dataservice: '
+                                   f'{url}, {resp.content}')
+    # There was more than one study returned for this accession code
+    if len(resp.json()['results']) > 1:
+        raise DataserviceException(f'More than one study found for {study}')
+    # There was no study found in the dataservice with the accession code
+    if len(resp.json()['results']) == 0:
+        raise DataserviceException(f'Could not find a study for {study}')
 
     version = resp.json()['results'][0]['version']
+    # The study has no version registered in the dataservice
     if not version:
-        return 'No version found for study'
+        raise DataserviceException(f'{study} has no version in dataservice')
+
+    # Need to now invoke new functions in batches to process each sample
     dbgap_codes = read_dbgap_xml(study+'.'+version)
     invoked = 0
     events = []
@@ -114,7 +137,7 @@ def map_one_study(study, lam, consentcode, context, DATASERVICE):
         events.append(event_generator(study, row))
 
         # Flush events
-        if len(events)+1 % BATCH_SIZE == 0:
+        if len(events) % BATCH_SIZE == 0:
             invoked += 1
             invoke(lam, consentcode, events)
             events = []

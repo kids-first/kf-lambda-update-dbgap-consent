@@ -33,3 +33,49 @@ def mock_dbgap():
             return study
 
     return MockdbGaP
+
+
+@pytest.fixture
+def mock_dataservice():
+    """
+    Returns a class that mocks the dataservice api
+    """
+
+    class MockDataservice():
+
+        def __init__(self, r, status_code=200, many=False, no_version=False):
+            self.request = r
+            self.status_code = status_code
+            self.many = many
+            self.no_version = no_version
+
+        @property
+        def content(self):
+            return self.json()
+
+        def json(self):
+            """
+            Returns study if external_id=phs001228 is passed:
+                Returns empty version in response if self.no_version
+                Returns two studies if self.many
+
+            Returns no results if an external id other than phs001228 is given
+            """
+            if '/studies?external_id=' in self.request:
+                if self.request.endswith('phs001228'):
+                    res = [{
+                        'kf_id': 'SD_00000000',
+                        'version': 'v1.p1'
+                    } for i in range(self.many+1)]
+                    if self.no_version:
+                        res[0]['version'] = None
+
+                    return {
+                        'results': res
+                    }
+                else:
+                    return {
+                        'results': []
+                    }
+
+    return MockDataservice
