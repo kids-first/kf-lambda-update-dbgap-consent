@@ -87,7 +87,7 @@ def handler(event, context):
     # Call functions for each sample in the study
     elif study and consentcode_func:
         try:
-            map_one_study(study, lam, consentcode_func, context, DATASERVICE)
+            map_one_study(study, lam, consentcode_func, DATASERVICE)
         except (DataserviceException, DbGapException) as err:
             # There was a problem trying to process the study, notify slack
             msg = f'Problem invoking for `{study}`: {err}'
