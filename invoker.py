@@ -17,12 +17,18 @@ BATCH_SIZE = 10
 SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
 SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
 SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
-kms = boto3.client('kms', region_name='us-east-1')
-SLACK_TOKEN = kms.decrypt(CiphertextBlob=b64decode(
-    SLACK_TOKEN)).get('Plaintext', None).decode('utf-8')
+
+if SLACK_TOKEN:
+    kms = boto3.client('kms', region_name='us-east-1')
+    SLACK_TOKEN = kms.decrypt(CiphertextBlob=b64decode(
+        SLACK_TOKEN)).get('Plaintext', None).decode('utf-8')
 
 
 class DbGapException(Exception):
+    pass
+
+
+class DataserviceException(Exception):
     pass
 
 
@@ -63,45 +69,67 @@ def handler(event, context):
     if DATASERVICE is None:
         return 'no dataservice url set'
 
-    study = event.get('study', None)
-    lam = boto3.client('lambda')
-    # # The consent code lambda ARN
-    consentcode = os.environ.get('FUNCTION', None)
-    if consentcode is None:
+    # The consent code lambda ARN
+    consentcode_func = os.environ.get('FUNCTION', None)
+
+    # User must give a function that will process individual entities
+    if consentcode_func is None:
         return 'no lambda specified'
+
+    lam = boto3.client('lambda')
+
+    study = event.get('study', None)
+    # If there is no study in the event, we should re-call this function for
+    # each event in the dataservice
     if study is None:
-        invoke_invidual_study_lamba(
-            DATASERVICE, lam, context.function_name)
+        map_to_studies(lam, context.function_name, DATASERVICE)
+    # Call functions for each sample in the study
     elif study and consentcode:
-        print('Try calling study with study id ', study)
-        status = invoke_individual_study(
-            study, lam, consentcode, context, DATASERVICE)
-        print(status)
-        if status:
-            attachments = [
-                {"fallback": "Failed to invoke update for "
-                 "study `{}`, message:{}".format(study, status),
-                 "text": "Failed to invoke update for "
-                 "study `{}`, message:{}".format(study, status),
-                 "color": "danger"
-                 }
-            ]
+        try:
+            map_one_study(study, lam, consentcode_func, context, DATASERVICE)
+        except (DataserviceException, DbGapException) as err:
+            # There was a problem trying to process the study, notify slack
+            msg = f'Problem invoking for `{study}`: {err}'
+            attachments = [{
+                'fallback': msg,
+                'text': msg,
+                'color': 'danger'
+            }]
             send_slack(attachments=attachments)
 
 
-def invoke_individual_study(study, lam, consentcode,
-                            context, DATASERVICE):
+def map_one_study(study, lam, consentcode, dataservice_api):
     """
-    invokes lambda for specific study
+    Attempt to load a dbGaP xml for a study and call a function for each
+    sample to update 
+
+    :param study: The dbGaP study_id
+    :param lam: A boto lambda client used to invoke lamda functions
+    :param consentcode: The name of the function that will be called for each
+        sample to update it inside the dataservice
+    :param dataservice_api: The url of the dataservice api
     """
     # Get dbgap released version from dataservice
-    resp = requests.get(
-        DATASERVICE + '/studies?external_id='+study)
-    if resp.status_code != 200 and len(resp.json()['results']) != 1:
-        return 'No unique study found with external id'
+    url = f'{dataservice_api}/studies?external_id={study}'
+    resp = requests.get(url)
+
+    # Problem with the request
+    if resp.status_code != 200:
+        raise DataserviceException(f'Problem requesting dataservice: '
+                                   f'{url}, {resp.content}')
+    # There was more than one study returned for this accession code
+    if len(resp.json()['results']) > 1:
+        raise DataserviceException(f'More than one study found for {study}')
+    # There was no study found in the dataservice with the accession code
+    if len(resp.json()['results']) == 0:
+        raise DataserviceException(f'Could not find a study for {study}')
+
     version = resp.json()['results'][0]['version']
+    # The study has no version registered in the dataservice
     if not version:
-        return 'No version found for study'
+        raise DataserviceException(f'{study} has no version in dataservice')
+
+    # Need to now invoke new functions in batches to process each sample
     dbgap_codes = read_dbgap_xml(study+'.'+version)
     invoked = 0
     events = []
@@ -109,7 +137,7 @@ def invoke_individual_study(study, lam, consentcode,
         events.append(event_generator(study, row))
 
         # Flush events
-        if len(events)+1 % BATCH_SIZE == 0:
+        if len(events) % BATCH_SIZE == 0:
             invoked += 1
             invoke(lam, consentcode, events)
             events = []
@@ -123,23 +151,27 @@ def read_dbgap_xml(accession):
     """
     Reads db_gap xml file and fetches consent code and external sample id
     for a given study
-    returns dataframe with consent code and external_sample_id
+    :returns: A list of tuples (consent_code, sample_id, consent_name)
+        for each sample in the study.
     """
-    url = "https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/GetSampleStatus.cgi?study_id=" + \
-        accession+"&rettype=xml"
+    url = (f'https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/' +
+           f'GetSampleStatus.cgi?study_id={accession}&rettype=xml')
     data = requests.get(url)
     if data.status_code != 200:
-        raise DbGapException('Study with version doesnt exist in '
-                             'dbgap or bad request')
+        raise DbGapException(f'Request for study {accession} returned non-200 '
+                             f'status code: {data.status_code}')
+
     data = xmltodict.parse(data.content)
     study_status = list(dict_or_list('@registration_status', data))
+
     if study_status[0] in ['released']:
         dbgap_codes = zip(dict_or_list('@consent_code', data),
                           dict_or_list('@submitted_sample_id', data),
                           dict_or_list('@consent_short_name', data))
         return dbgap_codes
     else:
-        raise DbGapException('study is not released by dbgap')
+        raise DbGapException(f'study {accession} is not released by dbgap. '
+                             f'registration_status: {study_status[0]}')
 
 
 def invoke(lam, consentcode, records):
@@ -166,12 +198,34 @@ def event_generator(study, row):
     return ev
 
 
-def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
+def map_to_studies(lam, invoker_func, dataservice_api):
     """
-    invokes lambda for individual study
+    Gets all studies in the dataservice and re-calls this lambda for each
+    providing the study_id as a parameter in the event.
+
+    :param lam: A boto lambda client used to invoke lamda functions
+    :param invoker_func: The name of the current function to call again to
+        process a given study
+    :param dataservice_api: The url of the dataservice api
     """
-    resp = requests.get(DATASERVICE + '/studies?limit=100')
-    total = len(resp.json()['results'])
+    url = f'{dataservice_api}/studies?limit=100'
+    resp = requests.get(url)
+
+    if resp.status_code != 200:
+        raise DataserviceException(f'Problem requesting dataservice: '
+                                   f'{url}, {resp.content}')
+    if 'total' not in resp.json() or resp.json()['total'] == 0:
+        raise DataserviceException(f'Dataservice has no studies')
+
+    for r in resp.json()['results']:
+        payload = {'study': r['external_id']}
+        response = lam.invoke(
+            FunctionName=invoker_func,
+            InvocationType='Event',
+            Payload=str.encode(json.dumps(payload)),
+        )
+
+    total = resp.json()['total']
     attachments = [
         {"fallback": "I'm about to update consent codes"
          " for `{}` studies,' hold tight...".format(total),
@@ -181,14 +235,6 @@ def invoke_invidual_study_lamba(DATASERVICE, lam, invoker_func):
          }
     ]
     send_slack(attachments=attachments)
-    if resp.status_code == 200 and len(resp.json()['results']) > 0:
-        for r in resp.json()['results']:
-            payload = {'study': r['external_id']}
-            response = lam.invoke(
-                FunctionName=invoker_func,
-                InvocationType='Event',
-                Payload=str.encode(json.dumps(payload)),
-            )
 
 
 def send_slack(msg=None, attachments=None):
