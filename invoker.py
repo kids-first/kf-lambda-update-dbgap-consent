@@ -83,8 +83,9 @@ def handler(event, context):
     # each event in the dataservice
     if study is None:
         map_to_studies(lam, context.function_name, DATASERVICE)
+
     # Call functions for each sample in the study
-    elif study and consentcode:
+    elif study and consentcode_func:
         try:
             map_one_study(study, lam, consentcode_func, context, DATASERVICE)
         except (DataserviceException, DbGapException) as err:
@@ -101,7 +102,7 @@ def handler(event, context):
 def map_one_study(study, lam, consentcode, dataservice_api):
     """
     Attempt to load a dbGaP xml for a study and call a function for each
-    sample to update 
+    sample to update
 
     :param study: The dbGaP study_id
     :param lam: A boto lambda client used to invoke lamda functions
