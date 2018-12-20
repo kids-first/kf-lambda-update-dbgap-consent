@@ -1,3 +1,18 @@
+# Kf Lambda Update Dbgap Consent Release 1.1.0
+
+## Features
+
+### Summary
+
+Feature Emojis: 🐛x1 x1 ✅x1
+Feature Labels:
+
+### New features and changes
+
+- (#22) 🐛 fix extra argument when calling map_one_study - @parimalak
+- (#21)  🐛 fix consent_func typo - @parimalak
+- (#19) ✅ Add unit tests - @dankolbman
+
 # Kids First Release Coordinator Release 1.0.0
 
 ## Features
