@@ -149,19 +149,19 @@ class AclUpdater:
         """
         Updates acl's of genomic files that are associated with biospecimen
         """
+        # Get the links of genomic files for that biospecimen
         response = self.get_gfs_from_biospecimen(biospecimen_id)
-        """
-        Get the links of genomic files for that biospecimen
-        """
         for r in response['results']:
+            acl = gf
             gf_link = r['_links']['genomic_file']
             resp = requests.get(
                 self.api+gf_link)
             if (resp.status_code != 200 and
                     len(resp.json()['results']) <= 0):
                 return 'Genomic file does not exist'
-            response = resp.json()
-            resp = requests.patch(self.api+gf_link, json=gf)
+            elif not resp.json()['results']['visible']:
+                acl = {"acl": []}
+            resp = requests.patch(self.api+gf_link, json=acl)
             if resp.status_code == 200 and len(resp.json()['results']) == 1:
                 print('Updated acl for genomic file')
         return

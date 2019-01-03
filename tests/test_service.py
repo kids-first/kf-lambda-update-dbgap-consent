@@ -31,13 +31,16 @@ def test_create(event):
             resp = MagicMock()
             resp.status_code = 200
             resp.json.return_value = {
-                'results': {'acl': []}}
+                'results': {
+                    'acl': [],
+                    'visible': None}
+            }
             return resp
         elif '/genomic-files' in url:
             resp = MagicMock()
             resp.status_code = 200
             resp.json.return_value = {
-                'results': [{'acl': []}]}
+                'results': [{'acl': [], 'visible': None}]}
             return resp
         elif '/biospecimens/' in url:
             resp = MagicMock()
