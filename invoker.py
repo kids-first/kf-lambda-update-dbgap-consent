@@ -13,7 +13,7 @@ record_template = {
     }
 }
 
-BATCH_SIZE = 10
+BATCH_SIZE = 5
 SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
 SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
 SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
