@@ -4,6 +4,10 @@ import boto3
 import json
 
 
+class DataserviceException(Exception):
+    pass
+
+
 def handler(event, context):
     """
     Update dbgap_consent_code in biospecimen and acl's in genomic file
@@ -134,15 +138,12 @@ class AclUpdater:
         Returns the links of biospecimen
         """
         resp = requests.get(
-            self.api+'/biospecimens/'+biospecimen_id)
-        if resp.status_code != 200 and len(resp.json()['results']) != 1:
-            return 'Biospecimen does not exist'
-        row = resp.json()
-        resp = requests.get(
-            self.api +
-            row['_links']['biospecimen_genomic_files']+'&limit=100')
+            self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
+            '&limit=100')
         if resp.status_code != 200 and len(resp.json()['results']) <= 0:
-            return 'No associated biospecimen-genomic-files found'
+            raise DataserviceException(
+                f'No associated genomic-files found for '
+                f'biospecimen {biospecimen_id}')
         return resp.json()
 
     def update_acl_genomic_file(self, gf, biospecimen_id):
@@ -153,15 +154,13 @@ class AclUpdater:
         response = self.get_gfs_from_biospecimen(biospecimen_id)
         for r in response['results']:
             acl = gf
-            gf_link = r['_links']['genomic_file']
-            resp = requests.get(
-                self.api+gf_link)
-            if (resp.status_code != 200 and
-                    len(resp.json()['results']) <= 0):
-                return 'Genomic file does not exist'
-            elif not resp.json()['results']['visible']:
+            if not r['visible']:
                 acl = {"acl": []}
-            resp = requests.patch(self.api+gf_link, json=acl)
-            if resp.status_code == 200 and len(resp.json()['results']) == 1:
-                print('Updated acl for genomic file')
+            # Do not update if acl's are as expected
+            if r['acl'] != acl['acl']:
+                resp = requests.patch(
+                    self.api+'/genomic-files/'+r['kf_id'], json=acl)
+                if resp.status_code == 200 and len(
+                        resp.json()['results']) == 1:
+                    print('Updated acl for genomic file')
         return
