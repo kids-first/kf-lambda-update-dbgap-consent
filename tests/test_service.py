@@ -33,14 +33,17 @@ def test_create(event):
             resp.json.return_value = {
                 'results': {
                     'acl': [],
-                    'visible': None}
+                    'visible': None,
+                    'kf_id': 'GF_00000000'}
             }
             return resp
         elif '/genomic-files' in url:
             resp = MagicMock()
             resp.status_code = 200
             resp.json.return_value = {
-                'results': [{'acl': [], 'visible': None}]}
+                'results': [{'acl': [],
+                             'visible': None,
+                             'kf_id': 'GF_00000000'}]}
             return resp
         elif '/biospecimens/' in url:
             resp = MagicMock()
@@ -48,7 +51,8 @@ def test_create(event):
                 '_links':
                 {'biospecimen_genomic_files':
                  '/biospecimen-genomic-files'
-                 '?biospecimen_id = BS_HFY3Y3XM'
+                 '?biospecimen_id = BS_HFY3Y3XM',
+                 'genomic_files': '/genomic-files?biospecimen_id=BS_HFY3Y3XM'
                  },
                 'results': {'kf_id': url[:-11],
                             'dbgap_consent_code': [],
