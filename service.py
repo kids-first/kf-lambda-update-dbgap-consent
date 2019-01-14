@@ -28,7 +28,7 @@ def handler(event, context):
         # NB: We check that i > 0 to ensure that *some* progress has been made
         # to avoid infinite call chains.
         if (hasattr(context, 'invoked_function_arn') and
-            context.get_remaining_time_in_millis() < 50000 and
+            context.get_remaining_time_in_millis() < 150000 and
                 i > 0):
             records = event['Records'][i:]
             print('not able to complete {} records, '
@@ -102,7 +102,7 @@ class AclUpdater:
             return self.external_ids[study_id], self.version[study_id]
         while retry_count > 1:
             resp = requests.get(
-                self.api+'/studies?external_id='+study_id, timeout=2)
+                self.api+'/studies?external_id='+study_id, timeout=5)
             if resp.status_code != 500:
                 break
             else:
@@ -122,7 +122,7 @@ class AclUpdater:
             resp = requests.get(
                 self.api+'/biospecimens?study_id='+study_id +
                 '&external_sample_id='+external_sample_id,
-                timeout=2)
+                timeout=5)
             if resp.status_code != 500:
                 break
             else:
@@ -147,7 +147,7 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.patch(
                 self.api+'/biospecimens/'+biospecimen_id,
-                json=bs, timeout=2)
+                json=bs, timeout=5)
             if resp.status_code != 500:
                 break
             else:
@@ -165,7 +165,7 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.get(
                 self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
-                '&limit=100', timeout=2)
+                '&limit=100', timeout=5)
             if resp.status_code != 500:
                 break
             else:
@@ -193,7 +193,7 @@ class AclUpdater:
                 while retry_count > 1:
                     resp = requests.patch(
                         self.api+'/genomic-files/'+r['kf_id'], json=acl,
-                        timeout=2)
+                        timeout=5)
                     if resp.status_code != 500:
                         break
                     else:
