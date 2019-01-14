@@ -2,6 +2,7 @@ from botocore.vendored import requests
 import os
 import boto3
 import json
+import time
 
 
 class DataserviceException(Exception):
@@ -27,7 +28,7 @@ def handler(event, context):
         # NB: We check that i > 0 to ensure that *some* progress has been made
         # to avoid infinite call chains.
         if (hasattr(context, 'invoked_function_arn') and
-            context.get_remaining_time_in_millis() < 5000 and
+            context.get_remaining_time_in_millis() < 50000 and
                 i > 0):
             records = event['Records'][i:]
             print('not able to complete {} records, '
@@ -94,11 +95,19 @@ class AclUpdater:
         Gets and stores the study's kf_id and version based
         on external study id
         """
+        retry_count = 3
         if study_id is None:
             return
         if study_id in self.external_ids:
             return self.external_ids[study_id], self.version[study_id]
-        resp = requests.get(self.api+'/studies?external_id='+study_id)
+        while retry_count > 1:
+            resp = requests.get(
+                self.api+'/studies?external_id='+study_id, timeout=2)
+            if resp.status_code != 500:
+                break
+            else:
+                time.sleep(1)
+                retry_count = retry_count - 1
         if resp.status_code == 200 and len(resp.json()['results']) == 1:
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
             self.version[study_id] = resp.json()['results'][0]['version']
@@ -108,9 +117,17 @@ class AclUpdater:
         """
         Gets biospecimen kf_id based on external sample id and study kf_id
         """
-        resp = requests.get(
-            self.api+'/biospecimens?study_id='+study_id +
-            '&external_sample_id='+external_sample_id)
+        retry_count = 3
+        while retry_count > 1:
+            resp = requests.get(
+                self.api+'/biospecimens?study_id='+study_id +
+                '&external_sample_id='+external_sample_id,
+                timeout=2)
+            if resp.status_code != 500:
+                break
+            else:
+                time.sleep(1)
+                retry_count = retry_count - 1
         if resp.status_code == 200 and len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
             dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
@@ -123,12 +140,19 @@ class AclUpdater:
         """
         Updates dbgap consent code for biospecimen id
         """
+        retry_count = 3
         bs = {
             "dbgap_consent_code": consent_code,
             "consent_type": consent_short_name}
-        resp = requests.patch(
-            self.api+'/biospecimens/'+biospecimen_id,
-            json=bs)
+        while retry_count > 1:
+            resp = requests.patch(
+                self.api+'/biospecimens/'+biospecimen_id,
+                json=bs, timeout=2)
+            if resp.status_code != 500:
+                break
+            else:
+                time.sleep(1)
+                retry_count = retry_count - 1
         if resp.status_code == 200:
             print('Updated consent code for biospecimen')
         return
@@ -137,9 +161,16 @@ class AclUpdater:
         """
         Returns the links of biospecimen
         """
-        resp = requests.get(
-            self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
-            '&limit=100')
+        retry_count = 3
+        while retry_count > 1:
+            resp = requests.get(
+                self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
+                '&limit=100', timeout=2)
+            if resp.status_code != 500:
+                break
+            else:
+                time.sleep(1)
+                retry_count = retry_count - 1
         if resp.status_code != 200 and len(resp.json()['results']) <= 0:
             raise DataserviceException(
                 f'No associated genomic-files found for '
@@ -151,6 +182,7 @@ class AclUpdater:
         Updates acl's of genomic files that are associated with biospecimen
         """
         # Get the links of genomic files for that biospecimen
+        retry_count = 3
         response = self.get_gfs_from_biospecimen(biospecimen_id)
         for r in response['results']:
             acl = gf
@@ -158,8 +190,15 @@ class AclUpdater:
                 acl = {"acl": []}
             # Do not update if acl's are as expected
             if r['acl'] != acl['acl']:
-                resp = requests.patch(
-                    self.api+'/genomic-files/'+r['kf_id'], json=acl)
+                while retry_count > 1:
+                    resp = requests.patch(
+                        self.api+'/genomic-files/'+r['kf_id'], json=acl,
+                        timeout=2)
+                    if resp.status_code != 500:
+                        break
+                    else:
+                        time.sleep(1)
+                        retry_count = retry_count - 1
                 if resp.status_code == 200 and len(
                         resp.json()['results']) == 1:
                     print('Updated acl for genomic file')
