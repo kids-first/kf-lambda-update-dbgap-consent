@@ -22,6 +22,7 @@ def handler(event, context):
         return 'no dataservice url set'
     updater = AclUpdater(DATASERVICE)
     res = {}
+    failed = {'Records': []}
     for i, record in enumerate(event['Records']):
 
         # If we're running out of time, stop processing and re-invoke
@@ -45,8 +46,23 @@ def handler(event, context):
             break
         else:
             # update consent code and acl
-            updater.update_acl(record)
-            res['genomic_file'] = 'processed all records'
+            failed_record = updater.update_acl(record)
+            if not failed_record:
+                failed['Records'].append(record)
+            else:
+                res['genomic_file'] = 'processed all records'
+
+    if failed['Records'] and hasattr(context, 'invoked_function_arn'):
+        lam = boto3.client('lambda')
+        # Invoke the lambda again with failed records
+        response = lam.invoke(
+            FunctionName=context.invoked_function_arn,
+            InvocationType='Event',
+            Payload=str.encode(json.dumps(failed))
+        )
+        res['genomic_file'] = 'calling lambda for failed records'
+    else:
+        res['genomic_file'] = 'processed all records'
     return res
 
 
@@ -63,6 +79,7 @@ class AclUpdater:
         updates dbgap consent code of biospecimen and acl's of genomic files
         in dataservice
         """
+        res = {'genomic_file': 'not updated', 'biospecimen': 'not updated'}
         study = record['study']['dbgap_id']
         external_id = record["study"]["sample_id"]
         consent_code = record["study"]["consent_code"]
@@ -85,10 +102,16 @@ class AclUpdater:
 
         # Do not update biospecimen if consent code is not changed
         if dbgap_cons_code != consent_code or consent_type != cons_short_name:
-            self.update_dbgap_consent_code(biospecimen_id=bs_id,
-                                           consent_code=consent_code,
-                                           consent_short_name=cons_short_name)
-        self.update_acl_genomic_file(biospecimen_id=bs_id, gf=gf)
+            status = self.update_dbgap_consent_code(
+                biospecimen_id=bs_id,
+                consent_code=consent_code,
+                consent_short_name=cons_short_name)
+            if not status:
+                return False
+        status = self.update_acl_genomic_file(biospecimen_id=bs_id, gf=gf)
+        if not status:
+            return False
+        return True
 
     def get_study_kf_id(self, study_id):
         """
@@ -102,7 +125,7 @@ class AclUpdater:
             return self.external_ids[study_id], self.version[study_id]
         while retry_count > 1:
             resp = requests.get(
-                self.api+'/studies?external_id='+study_id, timeout=5)
+                self.api+'/studies?external_id='+study_id)
             if resp.status_code != 500:
                 break
             else:
@@ -121,8 +144,7 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.get(
                 self.api+'/biospecimens?study_id='+study_id +
-                '&external_sample_id='+external_sample_id,
-                timeout=5)
+                '&external_sample_id='+external_sample_id)
             if resp.status_code != 500:
                 break
             else:
@@ -147,15 +169,15 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.patch(
                 self.api+'/biospecimens/'+biospecimen_id,
-                json=bs, timeout=5)
+                json=bs)
             if resp.status_code != 500:
                 break
             else:
                 time.sleep(1)
                 retry_count = retry_count - 1
-        if resp.status_code == 200:
-            print('Updated consent code for biospecimen')
-        return
+        if resp.status_code != 200:
+            return False
+        return True
 
     def get_gfs_from_biospecimen(self, biospecimen_id):
         """
@@ -165,7 +187,7 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.get(
                 self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
-                '&limit=100', timeout=5)
+                '&limit=100')
             if resp.status_code != 500:
                 break
             else:
@@ -192,8 +214,7 @@ class AclUpdater:
             if r['acl'] != acl['acl']:
                 while retry_count > 1:
                     resp = requests.patch(
-                        self.api+'/genomic-files/'+r['kf_id'], json=acl,
-                        timeout=5)
+                        self.api+'/genomic-files/'+r['kf_id'], json=acl)
                     if resp.status_code != 500:
                         break
                     else:
@@ -201,5 +222,5 @@ class AclUpdater:
                         retry_count = retry_count - 1
                 if resp.status_code == 200 and len(
                         resp.json()['results']) == 1:
-                    print('Updated acl for genomic file')
+                    return True
         return

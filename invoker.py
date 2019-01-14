@@ -13,7 +13,6 @@ record_template = {
     }
 }
 
-BATCH_SIZE = 5
 SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
 SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
 SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
@@ -132,19 +131,11 @@ def map_one_study(study, lam, consentcode, dataservice_api):
 
     # Need to now invoke new functions in batches to process each sample
     dbgap_codes = read_dbgap_xml(study+'.'+version)
-    invoked = 0
     events = []
     for row in dbgap_codes:
         events.append(event_generator(study, row))
 
-        # Flush events
-        if len(events) % BATCH_SIZE == 0:
-            invoked += 1
-            invoke(lam, consentcode, events)
-            events = []
-
     if len(events) > 0:
-        invoked += 1
         invoke(lam, consentcode, events)
 
 

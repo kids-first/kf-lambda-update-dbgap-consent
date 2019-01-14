@@ -62,15 +62,15 @@ def test_map_one_study(mock_dbgap, mock_dataservice):
     lam = MagicMock()
     invoker.map_one_study('phs001228', lam, 'consent_func', 'http://ds')
 
-    # Should be called in batches of 10 plus one for remainder
-    assert lam.invoke.call_count == 223
+    # Calling entire study in one batch
+    assert lam.invoke.call_count == 1
     # Check one of the calls to lambda were made with the right payload
     call = lam.invoke.call_args_list[0]
     assert call[1]['FunctionName'] == 'consent_func'
     assert call[1]['InvocationType'] == 'Event'
     payload = json.loads(call[1]['Payload'])
     assert 'Records' in payload
-    assert len(payload['Records']) == 5
+    assert len(payload['Records']) == 1113
     assert 'study' in payload['Records'][0]
     assert payload['Records'][0]['study']['consent_code'] == '1'
     assert payload['Records'][0]['study']['consent_short_name'] == 'GRU'

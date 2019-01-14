@@ -104,5 +104,4 @@ def test_create(event):
     req.post.return_value = mock_resp
 
     res = service.handler(event, {})
-
     assert len(res) == 1
