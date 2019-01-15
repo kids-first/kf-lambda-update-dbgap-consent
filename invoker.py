@@ -51,8 +51,7 @@ def dict_or_list(key, dictionary):
 
 def handler(event, context):
     """
-    Reads dbgap xml and invokes the consent code lambda for every
-    sample found in batches of 10 records for the dbgap study.
+    Reads dbgap xml and invokes the consent code lambda for the dbgap study.
     If dbgap study_id is not provided then gets all the studies
     from the dataservice and re-invokes lambda for each study.
 
@@ -134,7 +133,6 @@ def map_one_study(study, lam, consentcode, dataservice_api):
     events = []
     for row in dbgap_codes:
         events.append(event_generator(study, row))
-
     if len(events) > 0:
         invoke(lam, consentcode, events)
 

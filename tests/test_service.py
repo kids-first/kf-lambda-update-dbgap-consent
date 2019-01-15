@@ -3,6 +3,7 @@ import os
 import pytest
 from moto import mock_s3
 from mock import patch, MagicMock
+import json
 
 STUDY = None
 
@@ -15,6 +16,11 @@ def event():
             "sample_id": "PA2645",
             "consent_code": "1",
             "consent_short_name": "IRB"
+            }}, {"study": {
+                "dbgap_id": "phs001168",
+                "sample_id": "PA2644",
+                "consent_code": "1",
+                "consent_short_name": "IRB"
             }}]}
     return data
 
@@ -26,6 +32,10 @@ def test_create(event):
     mock = patch('service.requests')
     req = mock.start()
 
+    class Context:
+        def get_remaining_time_in_millis(self):
+            return 1600
+
     def mock_get(url, *args, **kwargs):
         if '/genomic-files/' in url:
             resp = MagicMock()
@@ -33,7 +43,7 @@ def test_create(event):
             resp.json.return_value = {
                 'results': {
                     'acl': [],
-                    'visible': None,
+                    'visible': True,
                     'kf_id': 'GF_00000000'}
             }
             return resp
@@ -42,7 +52,7 @@ def test_create(event):
             resp.status_code = 200
             resp.json.return_value = {
                 'results': [{'acl': [],
-                             'visible': None,
+                             'visible': True,
                              'kf_id': 'GF_00000000'}]}
             return resp
         elif '/biospecimens/' in url:
@@ -54,21 +64,21 @@ def test_create(event):
                  '?biospecimen_id = BS_HFY3Y3XM',
                  'genomic_files': '/genomic-files?biospecimen_id=BS_HFY3Y3XM'
                  },
-                'results': {'kf_id': url[:-11],
-                            'dbgap_consent_code': [],
+                'results': {'kf_id': 'BS_HFY3Y3XM',
+                            'dbgap_consent_code': 'phs001168.c1',
                             "consent_short_name": None,
                             'consent_type': None,
-                            'visible': None
+                            'visible': True
                             }}
             resp.status_code = 200
             return resp
         elif '/biospecimens' in url:
             resp = MagicMock()
             resp.json.return_value = {
-                'results': [{'kf_id': url[:-11],
-                             'dbgap_consent_code': [],
+                'results': [{'kf_id': 'BS_HFY3Y3XM',
+                             'dbgap_consent_code': 'phs001168.c1',
                              'consent_type': None,
-                             'visible': None,
+                             'visible': True,
                              '_links':
                              {'biospecimen_genomic_files':
                               '/biospecimen-genomic-files'
@@ -97,11 +107,13 @@ def test_create(event):
             return resp
 
     req.get.side_effect = mock_get
+    req.patch.side_effect = mock_get
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {'results': {'kf_id': 'GF_00000000'}}
     mock_resp.status_code = 201
     req.post.return_value = mock_resp
+    req.patch.return_value = mock_resp
+    res = service.handler(event, Context())
 
-    res = service.handler(event, {})
     assert len(res) == 1
