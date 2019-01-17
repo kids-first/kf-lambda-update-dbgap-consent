@@ -13,7 +13,6 @@ record_template = {
     }
 }
 
-BATCH_SIZE = 5
 SLACK_TOKEN = os.environ.get('SLACK_TOKEN', None)
 SLACK_CHANNELS = os.environ.get('SLACK_CHANNEL', '').split(',')
 SLACK_CHANNELS = [c.replace('#', '').replace('@', '') for c in SLACK_CHANNELS]
@@ -52,8 +51,7 @@ def dict_or_list(key, dictionary):
 
 def handler(event, context):
     """
-    Reads dbgap xml and invokes the consent code lambda for every
-    sample found in batches of 10 records for the dbgap study.
+    Reads dbgap xml and invokes the consent code lambda for the dbgap study.
     If dbgap study_id is not provided then gets all the studies
     from the dataservice and re-invokes lambda for each study.
 
@@ -132,19 +130,10 @@ def map_one_study(study, lam, consentcode, dataservice_api):
 
     # Need to now invoke new functions in batches to process each sample
     dbgap_codes = read_dbgap_xml(study+'.'+version)
-    invoked = 0
     events = []
     for row in dbgap_codes:
         events.append(event_generator(study, row))
-
-        # Flush events
-        if len(events) % BATCH_SIZE == 0:
-            invoked += 1
-            invoke(lam, consentcode, events)
-            events = []
-
     if len(events) > 0:
-        invoked += 1
         invoke(lam, consentcode, events)
 
 

@@ -2,10 +2,13 @@ from botocore.vendored import requests
 import os
 import boto3
 import json
-import time
 
 
 class DataserviceException(Exception):
+    pass
+
+
+class TimeoutException(Exception):
     pass
 
 
@@ -20,40 +23,37 @@ def handler(event, context):
 
     if DATASERVICE is None:
         return 'no dataservice url set'
-    updater = AclUpdater(DATASERVICE)
+    updater = AclUpdater(DATASERVICE, context)
     res = {}
-    for i, record in enumerate(event['Records']):
-
-        # If we're running out of time, stop processing and re-invoke
-        # NB: We check that i > 0 to ensure that *some* progress has been made
-        # to avoid infinite call chains.
+    while len(event['Records']) > 0:
         if (hasattr(context, 'invoked_function_arn') and
-            context.get_remaining_time_in_millis() < 150000 and
-                i > 0):
-            records = event['Records'][i:]
+                context.get_remaining_time_in_millis() < 15000):
             print('not able to complete {} records, '
-                  're-invoking the function'.format(len(records)))
-            remaining = {'Records': records}
+                  're-invoking the function'.format(len(event['Records'])))
             lam = boto3.client('lambda')
             # Invoke the lambda again with remaining records
             response = lam.invoke(
                 FunctionName=context.invoked_function_arn,
                 InvocationType='Event',
-                Payload=str.encode(json.dumps(remaining))
+                Payload=str.encode(json.dumps(event))
             )
             # Stop processing and exit
             break
         else:
-            # update consent code and acl
-            updater.update_acl(record)
-            res['genomic_file'] = 'processed all records'
+            try:
+                record = event['Records'].pop()
+                updater.update_acl(record)
+                res["genomic_file"] = 'processed all records'
+            except Exception:
+                event['Records'].append(record)
     return res
 
 
 class AclUpdater:
 
-    def __init__(self, api):
+    def __init__(self, api, context):
         self.api = api
+        self.context = context
         self.external_ids = {}
         self.version = {}
 
@@ -63,6 +63,7 @@ class AclUpdater:
         updates dbgap consent code of biospecimen and acl's of genomic files
         in dataservice
         """
+
         study = record['study']['dbgap_id']
         external_id = record["study"]["sample_id"]
         consent_code = record["study"]["consent_code"]
@@ -85,10 +86,16 @@ class AclUpdater:
 
         # Do not update biospecimen if consent code is not changed
         if dbgap_cons_code != consent_code or consent_type != cons_short_name:
-            self.update_dbgap_consent_code(biospecimen_id=bs_id,
-                                           consent_code=consent_code,
-                                           consent_short_name=cons_short_name)
-        self.update_acl_genomic_file(biospecimen_id=bs_id, gf=gf)
+            status = self.update_dbgap_consent_code(
+                biospecimen_id=bs_id,
+                consent_code=consent_code,
+                consent_short_name=cons_short_name)
+            if not status:
+                return False
+        status = self.update_acl_genomic_file(biospecimen_id=bs_id, gf=gf)
+        if not status:
+            return False
+        return True
 
     def get_study_kf_id(self, study_id):
         """
@@ -102,13 +109,15 @@ class AclUpdater:
             return self.external_ids[study_id], self.version[study_id]
         while retry_count > 1:
             resp = requests.get(
-                self.api+'/studies?external_id='+study_id, timeout=5)
+                self.api+'/studies?external_id='+study_id,
+                timeout=self.context.get_remaining_time_in_millis()-14000)
             if resp.status_code != 500:
                 break
             else:
-                time.sleep(1)
                 retry_count = retry_count - 1
-        if resp.status_code == 200 and len(resp.json()['results']) == 1:
+        if resp.status_code != 200:
+            raise TimeoutException
+        if len(resp.json()['results']) == 1:
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
             self.version[study_id] = resp.json()['results'][0]['version']
             return self.external_ids[study_id], self.version[study_id]
@@ -122,13 +131,14 @@ class AclUpdater:
             resp = requests.get(
                 self.api+'/biospecimens?study_id='+study_id +
                 '&external_sample_id='+external_sample_id,
-                timeout=5)
+                timeout=self.context.get_remaining_time_in_millis()-13000)
             if resp.status_code != 500:
                 break
             else:
-                time.sleep(1)
                 retry_count = retry_count - 1
-        if resp.status_code == 200 and len(resp.json()['results']) == 1:
+        if resp.status_code != 200:
+            raise TimeoutException
+        if len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
             dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
             consent_type = resp.json()['results'][0]['consent_type']
@@ -147,15 +157,15 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.patch(
                 self.api+'/biospecimens/'+biospecimen_id,
-                json=bs, timeout=5)
+                json=bs,
+                timeout=self.context.get_remaining_time_in_millis()-12000)
             if resp.status_code != 500:
                 break
             else:
-                time.sleep(1)
                 retry_count = retry_count - 1
-        if resp.status_code == 200:
-            print('Updated consent code for biospecimen')
-        return
+        if resp.status_code != 200:
+            raise TimeoutException
+        return True
 
     def get_gfs_from_biospecimen(self, biospecimen_id):
         """
@@ -165,17 +175,20 @@ class AclUpdater:
         while retry_count > 1:
             resp = requests.get(
                 self.api+'/genomic-files?biospecimen_id='+biospecimen_id +
-                '&limit=100', timeout=5)
+                '&limit=100',
+                timeout=self.context.get_remaining_time_in_millis()-11000)
             if resp.status_code != 500:
                 break
             else:
-                time.sleep(1)
                 retry_count = retry_count - 1
-        if resp.status_code != 200 and len(resp.json()['results']) <= 0:
+        if resp.status_code != 200:
+            raise TimeoutException
+        elif resp.status_code == 200 and len(resp.json()['results']) <= 0:
             raise DataserviceException(
                 f'No associated genomic-files found for '
                 f'biospecimen {biospecimen_id}')
-        return resp.json()
+        else:
+            return resp.json()
 
     def update_acl_genomic_file(self, gf, biospecimen_id):
         """
@@ -193,13 +206,12 @@ class AclUpdater:
                 while retry_count > 1:
                     resp = requests.patch(
                         self.api+'/genomic-files/'+r['kf_id'], json=acl,
-                        timeout=5)
+                        timeout=self.context
+                        .get_remaining_time_in_millis()-8000)
                     if resp.status_code != 500:
                         break
                     else:
-                        time.sleep(1)
                         retry_count = retry_count - 1
-                if resp.status_code == 200 and len(
-                        resp.json()['results']) == 1:
-                    print('Updated acl for genomic file')
+                if resp.status_code != 200:
+                    raise TimeoutException
         return
