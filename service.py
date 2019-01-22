@@ -44,6 +44,8 @@ def handler(event, context):
                 record = event['Records'].pop()
                 updater.update_acl(record)
                 res["genomic_file"] = 'processed all records'
+            except DataserviceException:
+                pass
             except Exception:
                 event['Records'].append(record)
     return res
@@ -138,12 +140,15 @@ class AclUpdater:
                 retry_count = retry_count - 1
         if resp.status_code != 200:
             raise TimeoutException
-        if len(resp.json()['results']) == 1:
+        elif len(resp.json()['results']) == 1:
             bs_id = resp.json()['results'][0]['kf_id']
             dbgap_cons_code = resp.json()['results'][0]['dbgap_consent_code']
             consent_type = resp.json()['results'][0]['consent_type']
             visible = resp.json()['results'][0]['visible']
             return bs_id, dbgap_cons_code, consent_type, visible
+        else:
+            raise DataserviceException(f'No biospecimen found for '
+            f'external sample id {external_sample_id}')
 
     def update_dbgap_consent_code(self, biospecimen_id,
                                   consent_code, consent_short_name):
