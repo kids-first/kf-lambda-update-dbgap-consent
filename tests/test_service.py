@@ -26,11 +26,7 @@ def test_create(event):
     os.environ['DATASERVICE'] = 'http://api.com/'
     mock = patch('service.requests')
     req = mock.start()
-
-    class Context:
-        def get_remaining_time_in_millis(self):
-            return 1600
-
+    study = "phs001168"
     def mock_get(url, *args, **kwargs):
         if '/genomic-files/' in url:
             resp = MagicMock()
@@ -109,38 +105,38 @@ def test_create(event):
     mock_resp.status_code = 201
     req.post.return_value = mock_resp
     req.patch.return_value = mock_resp
-    res = service.handler(event, Context())
+    res = service.map_one_study(study, os.environ['DATASERVICE'])
 
     assert len(res) == 1
 
-@mock_s3
-def test_out_of_time(event):
-    """ Test that a function is re-invoked when records remain """
-    os.environ['DATASERVICE_API'] = 'http://api.com/'
-    mock_r = patch('service.requests')
-    req = mock_r.start()
-
-    class Context:
-        def __init__(self):
-            self.invoked_function_arn = 'arn:aws:lambda:::function:kf-lambda'
-
-        def get_remaining_time_in_millis(self):
-            return 300
-
-    # Add a second record
-    event['Records'].append(event['Records'][0])
-
-    with patch('service.boto3.client') as mock:
-        service.handler(event, Context())
-        assert mock().invoke.call_count == 1
-
-        _, args = mock().invoke.call_args_list[0]
-        assert args['FunctionName'] == Context().invoked_function_arn
-        assert args['InvocationType'] == 'Event'
-        payload = json.loads(args['Payload'].decode('utf-8'))
-        assert  payload == {'Records': event['Records']}
-
-    mock_r.stop()
+# @mock_s3
+# def test_out_of_time(event):
+#     """ Test that a function is re-invoked when records remain """
+#     os.environ['DATASERVICE_API'] = 'http://api.com/'
+#     mock_r = patch('service.requests')
+#     req = mock_r.start()
+#
+#     class Context:
+#         def __init__(self):
+#             self.invoked_function_arn = 'arn:aws:lambda:::function:kf-lambda'
+#
+#         def get_remaining_time_in_millis(self):
+#             return 300
+#
+#     # Add a second record
+#     event['Records'].append(event['Records'][0])
+#
+#     with patch('service.boto3.client') as mock:
+#         service.handler(event, Context())
+#         assert mock().invoke.call_count == 1
+#
+#         _, args = mock().invoke.call_args_list[0]
+#         assert args['FunctionName'] == Context().invoked_function_arn
+#         assert args['InvocationType'] == 'Event'
+#         payload = json.loads(args['Payload'].decode('utf-8'))
+#         assert  payload == {'Records': event['Records']}
+#
+#     mock_r.stop()
 
 @mock_s3
 def test_get_biospecimen_id(event):
@@ -179,7 +175,7 @@ def test_get_biospecimen_id(event):
     mock_resp.status_code = 201
     req.post.return_value = mock_resp
 
-    updater = service.AclUpdater('http://api.com/', Context())
+    updater = service.AclUpdater('http://api.com/')
     updater.get_biospecimen_kf_id(external_sample_id='PA2645',
     study_id='SD_9PYZAHHE')
     assert req.get.call_count == 1
@@ -227,7 +223,7 @@ def test_update_consent_code(event):
     mock_resp.status_code = 201
     req.post.return_value = mock_resp
 
-    updater = service.AclUpdater('http://api.com/', Context())
+    updater = service.AclUpdater('http://api.com/')
     updater.update_dbgap_consent_code(biospecimen_id='BS_HFY3Y3XM',
                                   consent_code='phs001168.c1',
                                   consent_short_name='')
