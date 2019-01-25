@@ -4,7 +4,6 @@ import boto3
 import json
 import xmltodict
 import copy
-from collections import defaultdict
 
 class DataserviceException(Exception):
     pass
@@ -70,7 +69,6 @@ def map_one_study(study, dataservice_api):
     Attempt to load a dbGaP xml for a study and call a function for each
     sample to update
     :param study: The dbGaP study_id
-    :param lam: A boto lambda client used to invoke lamda functions
     :param consentcode: The name of the function that will be called for each
         sample to update it inside the dataservice
     :param dataservice_api: The url of the dataservice api
@@ -100,7 +98,6 @@ def map_one_study(study, dataservice_api):
     events = []
     for row in dbgap_codes:
         events.append(event_generator(study, row))
-    print(len(events), 'dbgap')
     payload = {'Records': events, 'Biospecimens': [], 'GenomicFiles': []}
     if len(payload['Records']) > 0:
         handler(payload, DATASERVICE=dataservice_api)
@@ -149,9 +146,7 @@ def gf_event_generator(row):
 def handler(event, DATASERVICE):
     """
     Update dbgap_consent_code in biospecimen and acl's in genomic file
-    from a list of lambda events. If all events are not processed before
-    the lambda runs out of time, the remaining will be submitted to
-    a new function
+    from a list of dbgap samples.
     """
     # DATASERVICE = os.environ.get('DATASERVICE', None)
 
@@ -159,6 +154,7 @@ def handler(event, DATASERVICE):
         return 'no dataservice url set'
     updater = AclUpdater(DATASERVICE)
     res = {}
+    print('dbgap', len(event['Records']))
     while len(event['Records']) > 0:
             try:
                 record = event['Records'].pop()
@@ -168,6 +164,7 @@ def handler(event, DATASERVICE):
                 pass
             except (TimeoutException, ValueError):
                 event['Records'].append(record)
+    print('bs', len(event['Biospecimens']))
     while len(event['Biospecimens']) > 0:
         try:
             bio_record = event['Biospecimens'].pop()
@@ -181,13 +178,18 @@ def handler(event, DATASERVICE):
                     bio_record['biospecimen']['consent_code'],
                     bio_record['biospecimen']['consent_type'])
             event = updater.update_genomic_files(bio_record, event)
+        except DataserviceException:
+            pass
         except TimeoutException:
             event['Biospecimens'].append(bio_record)
-    # print(event)
+    print('gf', len(event['GenomicFiles']))
     while len(event['GenomicFiles']) > 0:
         try:
             gf_record = event['GenomicFiles'].pop()
             updater.update_acl_genomic_file(gf_record)
+            print('gf', len(event['GenomicFiles']))
+        except DataserviceException:
+            pass
         except TimeoutException:
             event['GenomicFiles'].append(gf_record)
     return res
@@ -342,23 +344,24 @@ class AclUpdater:
         Updates acl's of genomic files
         """
         record = list(gf_record.values())[0]
-        acl = {"acl": []}
+        acl = {"acl": [record['phs_id'], record['study_id']]}
         if not record['visible']:
-            acl = {"acl": []}
+            acl = {"acl": [record['phs_id'], record['study_id']]}
         else:
             if ((len(set(record['consent_code']))>1) or
             (set(record['consent_code']) is None)):
-                acl = {"acl": []}
+                acl = {"acl": [record['phs_id'], record['study_id']]}
             else:
-                acl['acl'].extend((record['consent_code'][0],
-                record['phs_id'], record['study_id']))
+                acl['acl'].extend((record['consent_code'][0]))
         retry_count = 3
-
+        kf_id = list(gf_record.keys())[0]
         # Do not update if acl's are as expected
         if set(record['acl']) != set(acl['acl']):
-            while retry_count > 1:
+           print(gf_record)
+           while retry_count > 1:
                 resp = requests.patch(
-                        self.api+'/genomic-files/'+r['kf_id'], json=acl)
+                        self.api+'/genomic-files/'+kf_id, json=acl)
+                print(kf_id, resp)
                 if resp.status_code != 500:
                     break
                 else:
@@ -369,5 +372,5 @@ class AclUpdater:
 
 if __name__ == '__main__':
     study = 'phs001410'
-    dataservice_api = 'https://kf-api-dataservice-qa.kids-first.io/'
+    dataservice_api = 'https://kf-api-dataservice.kids-first.io'
     map_one_study(study, dataservice_api)
