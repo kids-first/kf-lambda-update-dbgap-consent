@@ -1,9 +1,8 @@
 from botocore.vendored import requests
-import os
-import boto3
-import json
 import xmltodict
 import copy
+import click
+
 
 class DataserviceException(Exception):
     pass
@@ -11,6 +10,11 @@ class DataserviceException(Exception):
 
 class TimeoutException(Exception):
     pass
+
+
+class DbGapException(Exception):
+    pass
+
 
 record_template = {
     "study": {
@@ -23,6 +27,7 @@ bs_record_template = {
         "kf_id": "SD_9PYZAHHE"
     }
 }
+
 
 def dict_or_list(key, dictionary):
     if type(dictionary) != 'str':
@@ -37,6 +42,7 @@ def dict_or_list(key, dictionary):
                     if isinstance(d, dict):
                         for result in dict_or_list(key, d):
                             yield result
+
 
 def read_dbgap_xml(accession):
     """
@@ -60,9 +66,11 @@ def read_dbgap_xml(accession):
                           dict_or_list('@submitted_sample_id', data),
                           dict_or_list('@consent_short_name', data))
         return dbgap_codes
+
     else:
         raise DbGapException(f'study {accession} is not released by dbgap. '
                              f'registration_status: {study_status[0]}')
+
 
 def map_one_study(study, dataservice_api):
     """
@@ -102,6 +110,7 @@ def map_one_study(study, dataservice_api):
     if len(payload['Records']) > 0:
         handler(payload, DATASERVICE=dataservice_api)
 
+
 def event_generator(study, row):
     """
     Generates events for each sample in dbgap
@@ -109,9 +118,10 @@ def event_generator(study, row):
     ev = copy.deepcopy(record_template)
     ev["study"]["dbgap_id"] = study
     ev["study"]["sample_id"] = row[1]
-    ev["study"]["consent_code"] = row[0]
+    ev["study"]["consent_code_xml"] = row[0]
     ev["study"]["consent_short_name"] = row[2]
     return ev
+
 
 def biospecimen_event_generator(row):
     """
@@ -119,29 +129,31 @@ def biospecimen_event_generator(row):
     """
     ev = copy.deepcopy(bs_record_template)
     ev['biospecimen']["study_id"] = row[0]
-    ev['biospecimen']["external_sample_id"]= row[1]
+    ev['biospecimen']["external_sample_id"] = row[1]
     ev['biospecimen']["kf_id"] = row[2]
     ev['biospecimen']["dbgap_consent_code"] = row[3]
-    ev['biospecimen']["consent_code"] = row[4]
+    ev['biospecimen']["consent_code_xml"] = row[4]
     ev['biospecimen']["consent_type"] = row[5]
     ev['biospecimen']["cons_short_name"] = row[6]
     ev['biospecimen']["visible"] = row[7]
     ev['biospecimen']['phs_id'] = row[8]
     return ev
 
+
 def gf_event_generator(row):
     """
     Generates events for each genomic_file
     """
     ev = {}
-    ev[row[0]]={"acl": row[1],
-                "visible": row[2],
-                "consent_code": [row[3]],
-                "biospecimen_id": [row[4]],
-                 "study_id": row[5],
-                 "phs_id": row[6]
-                }
+    ev[row[0]] = {"acl": row[1],
+                  "visible": row[2],
+                  "consent_code_xml": [row[3]],
+                  "biospecimen_id": [row[4]],
+                  "study_id": row[5],
+                  "phs_id": row[6]
+                  }
     return ev
+
 
 def handler(event, DATASERVICE):
     """
@@ -156,33 +168,33 @@ def handler(event, DATASERVICE):
     res = {}
     print('dbgap', len(event['Records']))
     while len(event['Records']) > 0:
-            try:
-                record = event['Records'].pop()
-                bs_values = updater.update_biospecimens(record, event)
-                event['Biospecimens'].append(biospecimen_event_generator(bs_values))
-            except DataserviceException:
-                pass
-            except (TimeoutException, ValueError):
-                event['Records'].append(record)
-    print('bs', len(event['Biospecimens']))
+        try:
+            record = event['Records'].pop()
+            bs_values = updater.update_biospecimens(record, event)
+            event['Biospecimens'].append(biospecimen_event_generator(bs_values))
+        except DataserviceException:
+            pass
+        except (TimeoutException, ValueError):
+            event['Records'].append(record)
+    print('Total Biospecimens', len(event['Biospecimens']))
     while len(event['Biospecimens']) > 0:
         try:
             bio_record = event['Biospecimens'].pop()
             # Do not update biospecimen if consent code is not changed
             if ((bio_record['biospecimen']['dbgap_consent_code']
-            != bio_record['biospecimen']['consent_code']) or
-            (bio_record['biospecimen']['consent_type'] !=
-            bio_record['biospecimen']['cons_short_name'])):
+                 != bio_record['biospecimen']['consent_code_xml']) or
+                (bio_record['biospecimen']['consent_type'] !=
+                 bio_record['biospecimen']['cons_short_name'])):
                 updater.update_dbgap_consent_code(
                     bio_record['biospecimen']['kf_id'],
-                    bio_record['biospecimen']['consent_code'],
-                    bio_record['biospecimen']['consent_type'])
+                    bio_record['biospecimen']['consent_code_xml'],
+                    bio_record['biospecimen']['cons_short_name'])
             event = updater.update_genomic_files(bio_record, event)
         except DataserviceException:
             pass
         except TimeoutException:
             event['Biospecimens'].append(bio_record)
-    print('gf', len(event['GenomicFiles']))
+    print('Total Genomic Files', len(event['GenomicFiles']))
     while len(event['GenomicFiles']) > 0:
         try:
             gf_record = event['GenomicFiles'].pop()
@@ -211,7 +223,7 @@ class AclUpdater:
 
         study = record['study']['dbgap_id']
         external_id = record["study"]["sample_id"]
-        consent_code = record["study"]["consent_code"]
+        consent_code = record["study"]["consent_code_xml"]
         cons_short_name = record["study"]["consent_short_name"]
         study_id, version = self.get_study_kf_id(study_id=study)
         (bs_id, dbgap_cons_code,
@@ -224,24 +236,24 @@ class AclUpdater:
         else:
             consent_code = study+'.c' + consent_code
         bs_values = [study_id, external_id, bs_id, dbgap_cons_code, consent_code,
-         consent_type, cons_short_name, visible, study]
+                     consent_type, cons_short_name, visible, study]
         return bs_values
 
     def update_genomic_files(self, record, events):
         bs_id = record['biospecimen']['kf_id']
         study_id = record['biospecimen']["study_id"]
         phs_id = record['biospecimen']["phs_id"]
-        consent_code = record['biospecimen']["consent_code"]
+        consent_code = record['biospecimen']["consent_code_xml"]
         response = self.get_gfs_from_biospecimen(bs_id)
         for r in response['results']:
             gf_values = [r['kf_id'], r['acl'], r['visible'], consent_code,
-            bs_id, study_id, phs_id]
+                         bs_id, study_id, phs_id]
             gf_dict = gf_event_generator(gf_values)
             if list(dict_or_list(r['kf_id'], events)):
                 for gf in events['GenomicFiles']:
                     for key, val in gf.items():
                         if r['kf_id'] == key:
-                            val['consent_code'].append(consent_code)
+                            val['consent_code_xml'].append(consent_code)
                             val['biospecimen_id'].append(bs_id)
             else:
                 events['GenomicFiles'].append(gf_dict)
@@ -270,7 +282,6 @@ class AclUpdater:
             self.external_ids[study_id] = resp.json()['results'][0]['kf_id']
             self.version[study_id] = resp.json()['results'][0]['version']
             return self.external_ids[study_id], self.version[study_id]
-
 
     def get_biospecimen_kf_id(self, external_sample_id, study_id):
         """
@@ -348,20 +359,21 @@ class AclUpdater:
         if not record['visible']:
             acl = {"acl": [record['phs_id'], record['study_id']]}
         else:
-            if ((len(set(record['consent_code']))>1) or
-            (set(record['consent_code']) is None)):
+            if ((len(set(record['consent_code_xml'])) > 1) or
+                    (set(record['consent_code_xml']) is None)):
                 acl = {"acl": [record['phs_id'], record['study_id']]}
             else:
-                acl['acl'].extend((record['consent_code'][0]))
+                acl['acl'].append((record['consent_code_xml'][0]))
+                print(acl)
         retry_count = 3
         kf_id = list(gf_record.keys())[0]
         # Do not update if acl's are as expected
         if set(record['acl']) != set(acl['acl']):
-           print(gf_record)
-           while retry_count > 1:
+            print(gf_record)
+            while retry_count > 1:
                 resp = requests.patch(
-                        self.api+'/genomic-files/'+kf_id, json=acl)
-                print(kf_id, resp)
+                    self.api+'/genomic-files/'+kf_id, json=acl)
+                print(kf_id, resp, acl)
                 if resp.status_code != 500:
                     break
                 else:
@@ -370,7 +382,19 @@ class AclUpdater:
                     raise TimeoutException
         return
 
-if __name__ == '__main__':
-    study = 'phs001410'
-    dataservice_api = 'https://kf-api-dataservice.kids-first.io'
+
+@click.command()
+# @click.option('--study', help='dbgap study id')
+# @click.option('--dataservice_api',
+#               help='url to reach dataservice dataservice')
+def run_acl():
+    study = click.prompt('Please enter dbgap study id')
+    dataservice_api = click.prompt('url to reach dataservice dataservice')
     map_one_study(study, dataservice_api)
+
+
+if __name__ == '__main__':
+    run_acl()
+
+    # study = 'phs001410'
+    # dataservice_api = 'https://kf-api-dataservice.kids-first.io'
